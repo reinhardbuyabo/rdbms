@@ -38,6 +38,7 @@ impl Header {
 pub struct DiskManager {
     file: File,
     header: Header, // in-memory header (synced on every allocation)
+    #[allow(dead_code)]
     path: String,   // for possible reopen/use // stored for debugging and future reopen/diagnostics
 }
 
@@ -48,6 +49,7 @@ impl DiskManager {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(&path)?;
         let mut dm = DiskManager {
             file,
