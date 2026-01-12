@@ -1,0 +1,46 @@
+name: PR Checks
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------------
+  # JOB 1: RUST CORE (Storage, DB, WAL)
+  # ------------------------------------------------------------------
+  rust-core:
+    name: Rust Core (Fmt/Clippy/Test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Cargo Dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (Linting)
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Run Tests
+        # Runs unit tests for storage, wal, db, etc.
+        run: cargo test --workspace --verbose
