@@ -39,7 +39,7 @@ pub struct DiskManager {
     file: File,
     header: Header, // in-memory header (synced on every allocation)
     #[allow(dead_code)]
-    path: String,   // for possible reopen/use // stored for debugging and future reopen/diagnostics
+    path: String, // for possible reopen/use // stored for debugging and future reopen/diagnostics
 }
 
 impl DiskManager {
