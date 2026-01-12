@@ -1,14 +1,13 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+// MODULE DECLARATIONS
+// These files exist internally but we decide what to expose below.
+mod disk;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// PUBLIC API EXPORTS
+// Users of this crate (like the main DB server) can access these directly.
+pub use disk::{DiskManager, PAGE_SIZE, PageId};
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+// COMING SOON:
+// mod page;
+// mod buffer;
+// pub use page::Page;
+// pub use buffer::BufferPoolManager;
