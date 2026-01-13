@@ -1,0 +1,13 @@
+[package]
+name = "query"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sqlparser = "0.52"
+thiserror = "2.0"
+anyhow = "1.0"
+common = { path = "../common" }
+
+[dev-dependencies]
+insta = "1.40"
