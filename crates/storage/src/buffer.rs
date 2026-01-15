@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use thiserror::Error;
@@ -57,10 +58,16 @@ struct BufferPoolState {
     free_list: Vec<FrameId>,
 }
 
+#[derive(Default)]
+struct BufferPoolMetrics {
+    fetch_count: AtomicUsize,
+}
+
 /// Buffer pool manager for caching pages between disk and memory.
 #[derive(Clone)]
 pub struct BufferPoolManager {
     inner: Arc<Mutex<BufferPoolState>>,
+    metrics: Arc<BufferPoolMetrics>,
 }
 
 impl BufferPoolManager {
@@ -77,11 +84,22 @@ impl BufferPoolManager {
         };
         Self {
             inner: Arc::new(Mutex::new(state)),
+            metrics: Arc::new(BufferPoolMetrics::default()),
         }
     }
 
     fn lock_state(&self) -> BufferPoolResult<MutexGuard<'_, BufferPoolState>> {
         self.inner.lock().map_err(|_| BufferPoolError::LockPoisoned)
+    }
+
+    /// Returns the number of page fetches since last reset.
+    pub fn fetch_count(&self) -> usize {
+        self.metrics.fetch_count.load(Ordering::Relaxed)
+    }
+
+    /// Resets the fetch counter to zero.
+    pub fn reset_fetch_count(&self) {
+        self.metrics.fetch_count.store(0, Ordering::Relaxed);
     }
 
     fn evict_if_needed(state: &mut BufferPoolState, frame_id: FrameId) -> BufferPoolResult<()> {
@@ -127,6 +145,7 @@ impl BufferPoolManager {
 
     /// Fetches a page into memory and pins it, returning a guarded reference.
     pub fn fetch_page(&self, page_id: PageId) -> BufferPoolResult<Option<PageGuard<'_>>> {
+        self.metrics.fetch_count.fetch_add(1, Ordering::Relaxed);
         let mut state = self.lock_state()?;
         if let Some(&frame_id) = state.page_table.get(&page_id) {
             let page = &mut state.pages[frame_id];

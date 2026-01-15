@@ -1,12 +1,19 @@
 use crate::execution::operator::{ExecutionError, ExecutionResult, PhysicalOperator};
 use crate::execution::tuple::{Tuple, Value};
 use crate::schema::{DataType, Schema};
+use std::any::Any;
 use std::sync::{Arc, Mutex, MutexGuard};
 use storage::{BufferPoolManager, Page, PageId, PAGE_SIZE};
 
 const HEADER_SIZE: usize = 16;
 const SLOT_SIZE: usize = 8;
 const INVALID_PAGE_ID: PageId = 0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rid {
+    pub page_id: PageId,
+    pub slot_id: u32,
+}
 
 #[derive(Clone)]
 pub struct TableHeap {
@@ -42,7 +49,7 @@ impl TableHeap {
         Ok(())
     }
 
-    pub fn insert_tuple(&self, tuple: &Tuple, schema: &Schema) -> ExecutionResult<()> {
+    pub fn insert_tuple(&self, tuple: &Tuple, schema: &Schema) -> ExecutionResult<Rid> {
         let tuple_bytes = encode_tuple(tuple, schema)?;
         let mut current_page_id = self.first_page_id()?;
         if current_page_id.is_none() {
@@ -56,6 +63,7 @@ impl TableHeap {
                 .ok_or_else(|| ExecutionError::Execution("table heap has no pages".to_string()))?;
 
             let mut inserted = false;
+            let mut inserted_slot = None;
             let mut next_page_id = None;
             let mut page_dirty = false;
             let mut needs_new_page = false;
@@ -74,9 +82,10 @@ impl TableHeap {
                             "failed to write tuple bytes".to_string(),
                         ));
                     }
+                    let slot_index = header.slot_count as usize;
                     write_slot(
                         &mut page_guard,
-                        header.slot_count as usize,
+                        slot_index,
                         TableSlot {
                             offset: tuple_offset,
                             len: tuple_bytes.len() as u32,
@@ -86,6 +95,7 @@ impl TableHeap {
                     header.free_space_offset = tuple_offset;
                     write_header(&mut page_guard, &header)?;
                     inserted = true;
+                    inserted_slot = Some(slot_index as u32);
                     page_dirty = true;
                 } else if let Some(existing_next) = header.next_page_id {
                     next_page_id = Some(existing_next);
@@ -96,7 +106,10 @@ impl TableHeap {
 
             if inserted {
                 self.buffer_pool.unpin_page(page_id, page_dirty)?;
-                return Ok(());
+                return Ok(Rid {
+                    page_id,
+                    slot_id: inserted_slot.expect("inserted slot missing"),
+                });
             }
 
             self.buffer_pool.unpin_page(page_id, page_dirty)?;
@@ -119,6 +132,109 @@ impl TableHeap {
                 current_page_id = next_page_id;
             }
         }
+    }
+
+    pub fn get_tuple(&self, rid: Rid, schema: &Schema) -> ExecutionResult<Option<Tuple>> {
+        let mut tuple = None;
+        {
+            let page_guard = self.fetch_page(rid.page_id)?;
+            let header = read_header(&page_guard)?;
+            if rid.slot_id < header.slot_count {
+                if let Some(slot) = read_slot(&page_guard, rid.slot_id as usize)? {
+                    let tuple_bytes = read_tuple_bytes(&page_guard, &slot)?;
+                    tuple = Some(decode_tuple(schema, &tuple_bytes)?);
+                }
+            }
+        }
+        self.buffer_pool.unpin_page(rid.page_id, false)?;
+        Ok(tuple)
+    }
+
+    pub fn delete_tuple(&self, rid: Rid) -> ExecutionResult<bool> {
+        let mut deleted = false;
+        {
+            let mut page_guard = self.fetch_page(rid.page_id)?;
+            let header = read_header(&page_guard)?;
+            if rid.slot_id < header.slot_count {
+                if let Some(mut slot) = read_slot(&page_guard, rid.slot_id as usize)? {
+                    if slot.len != 0 {
+                        slot.len = 0;
+                        write_slot(&mut page_guard, rid.slot_id as usize, slot)?;
+                        deleted = true;
+                    }
+                }
+            }
+        }
+        self.buffer_pool.unpin_page(rid.page_id, deleted)?;
+        Ok(deleted)
+    }
+
+    pub fn update_tuple(&self, rid: Rid, tuple: &Tuple, schema: &Schema) -> ExecutionResult<Rid> {
+        let tuple_bytes = encode_tuple(tuple, schema)?;
+        let mut updated = false;
+        {
+            let mut page_guard = self.fetch_page(rid.page_id)?;
+            let header = read_header(&page_guard)?;
+            if rid.slot_id >= header.slot_count {
+                return Err(ExecutionError::Execution(
+                    "update slot out of range".to_string(),
+                ));
+            }
+            let slot = read_slot(&page_guard, rid.slot_id as usize)?
+                .ok_or_else(|| ExecutionError::Execution("tuple slot is empty".to_string()))?;
+            if slot.len == 0 {
+                return Err(ExecutionError::Execution(
+                    "tuple slot is deleted".to_string(),
+                ));
+            }
+            if tuple_bytes.len() <= slot.len as usize {
+                if !page_guard.write_bytes(slot.offset as usize, &tuple_bytes) {
+                    return Err(ExecutionError::Execution(
+                        "failed to write updated tuple".to_string(),
+                    ));
+                }
+                let mut updated_slot = slot;
+                updated_slot.len = tuple_bytes.len() as u32;
+                write_slot(&mut page_guard, rid.slot_id as usize, updated_slot)?;
+                updated = true;
+            }
+        }
+        self.buffer_pool.unpin_page(rid.page_id, updated)?;
+        if updated {
+            return Ok(rid);
+        }
+        let _ = self.delete_tuple(rid)?;
+        self.insert_tuple(tuple, schema)
+    }
+
+    pub fn scan_tuples(&self, schema: &Schema) -> ExecutionResult<Vec<(Rid, Tuple)>> {
+        let mut output = Vec::new();
+        let mut current_page_id = self.first_page_id()?;
+        while let Some(page_id) = current_page_id {
+            let (header, tuples) = {
+                let page_guard = self.fetch_page(page_id)?;
+                let header = read_header(&page_guard)?;
+                let mut tuples = Vec::new();
+                for slot_index in 0..header.slot_count as usize {
+                    if let Some(slot) = read_slot(&page_guard, slot_index)? {
+                        let tuple_bytes = read_tuple_bytes(&page_guard, &slot)?;
+                        let tuple = decode_tuple(schema, &tuple_bytes)?;
+                        tuples.push((
+                            Rid {
+                                page_id,
+                                slot_id: slot_index as u32,
+                            },
+                            tuple,
+                        ));
+                    }
+                }
+                (header, tuples)
+            };
+            self.buffer_pool.unpin_page(page_id, false)?;
+            output.extend(tuples);
+            current_page_id = header.next_page_id;
+        }
+        Ok(output)
     }
 
     fn allocate_page(&self) -> ExecutionResult<PageId> {
@@ -215,6 +331,10 @@ impl PhysicalOperator for SeqScan {
         self.current_page_id = None;
         self.current_slot = 0;
         Ok(())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

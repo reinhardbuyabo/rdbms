@@ -1,6 +1,7 @@
 use crate::execution::tuple::{Tuple, Value};
 use crate::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::schema::{DataType, Schema};
+use std::any::Any;
 use std::cmp::Ordering;
 use thiserror::Error;
 
@@ -10,6 +11,12 @@ pub enum ExecutionError {
     Storage(#[from] storage::BufferPoolError),
     #[error("table not found: {0}")]
     TableNotFound(String),
+    #[error("constraint violation on {table}.{constraint}: key {key}")]
+    ConstraintViolation {
+        table: String,
+        constraint: String,
+        key: String,
+    },
     #[error("expression error: {0}")]
     Expression(String),
     #[error("schema error: {0}")]
@@ -28,6 +35,7 @@ pub trait PhysicalOperator {
     fn open(&mut self) -> ExecutionResult<()>;
     fn next(&mut self) -> ExecutionResult<Option<Tuple>>;
     fn close(&mut self) -> ExecutionResult<()>;
+    fn as_any(&self) -> &dyn Any;
 }
 
 pub fn evaluate_predicate(expr: &Expr, tuple: &Tuple, schema: &Schema) -> ExecutionResult<bool> {

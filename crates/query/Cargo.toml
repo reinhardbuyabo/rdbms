@@ -12,3 +12,5 @@ storage = { path = "../storage" }
 
 [dev-dependencies]
 insta = "1.40"
+rand = "0.8"
+tempfile = "3.8"
