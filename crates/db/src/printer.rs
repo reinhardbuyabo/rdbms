@@ -74,6 +74,7 @@ mod tests {
             table: None,
             data_type: DataType::Text,
             nullable: true,
+            visible: true,
         }])
     }
 
@@ -89,12 +90,14 @@ mod tests {
                 table: Some("users".to_string()),
                 data_type: DataType::Integer,
                 nullable: false,
+                visible: true,
             },
             Field {
                 name: "name".to_string(),
                 table: Some("users".to_string()),
                 data_type: DataType::Text,
                 nullable: false,
+                visible: true,
             },
         ]);
         let rows = vec![Tuple::new(vec![
@@ -157,6 +160,7 @@ mod tests {
             table: None,
             data_type: DataType::Integer,
             nullable: false,
+            visible: true,
         }]);
         let rows = (0..100_000)
             .map(|idx| Tuple::new(vec![Value::Integer(idx as i64)]))

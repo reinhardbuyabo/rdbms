@@ -22,18 +22,21 @@ pub fn users_schema() -> Schema {
             table: Some("users".to_string()),
             data_type: DataType::Integer,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "name".to_string(),
             table: Some("users".to_string()),
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "email".to_string(),
             table: Some("users".to_string()),
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
     ])
 }

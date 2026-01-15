@@ -10,10 +10,10 @@ use crate::logical_plan::{
 use crate::schema::{ColumnDef, DataType as LocalDataType, DefaultValue};
 use anyhow::{bail, Context, Result};
 use sqlparser::ast::{
-    AssignmentTarget, BinaryOperator as SqlBinaryOp, ColumnOption, CreateTable,
-    DataType as SqlDataType, Delete, Expr as SqlExpr, FromTable, FunctionArg, FunctionArgExpr,
-    FunctionArguments, GroupByExpr, Insert, JoinConstraint, JoinOperator, ObjectName, OrderByExpr,
-    Query, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
+    AlterTableOperation, AssignmentTarget, BinaryOperator as SqlBinaryOp, ColumnOption,
+    CreateTable, DataType as SqlDataType, Delete, Expr as SqlExpr, FromTable, FunctionArg,
+    FunctionArgExpr, FunctionArguments, GroupByExpr, Insert, JoinConstraint, JoinOperator,
+    ObjectName, OrderByExpr, Query, SelectItem, SetExpr, Statement, TableFactor, TableWithJoins,
     UnaryOperator as SqlUnaryOp, Value,
 };
 use std::collections::HashMap;
@@ -55,6 +55,9 @@ impl LogicalPlanner {
                 names,
                 ..
             } => self.plan_drop(object_type, names, if_exists),
+            Statement::AlterTable {
+                name, operations, ..
+            } => self.plan_alter_table(name, operations),
             _ => bail!("Unsupported statement type: {:?}", stmt),
         }
     }
@@ -503,43 +506,45 @@ impl LogicalPlanner {
         let column_defs: Result<Vec<_>> = ct
             .columns
             .into_iter()
-            .map(|col| {
-                let data_type = self.convert_data_type(&col.data_type)?;
-                let mut nullable = true;
-                let mut primary_key = false;
-                let mut unique = false;
-                let mut default_value = None;
-                for option in col.options {
-                    match option.option {
-                        ColumnOption::Null => nullable = true,
-                        ColumnOption::NotNull => nullable = false,
-                        ColumnOption::Unique { is_primary, .. } => {
-                            unique = true;
-                            if is_primary {
-                                primary_key = true;
-                                nullable = false;
-                            }
-                        }
-                        ColumnOption::Default(expr) => {
-                            default_value = Some(self.plan_expr_to_default(expr)?);
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(ColumnDef {
-                    name: col.name.value,
-                    data_type,
-                    nullable,
-                    primary_key,
-                    unique,
-                    default_value,
-                })
-            })
+            .map(|col| self.plan_column_def(col))
             .collect();
         Ok(LogicalPlan::CreateTable {
             table_name,
             columns: column_defs?,
             if_not_exists: ct.if_not_exists,
+        })
+    }
+
+    fn plan_column_def(&mut self, col: sqlparser::ast::ColumnDef) -> Result<ColumnDef> {
+        let data_type = self.convert_data_type(&col.data_type)?;
+        let mut nullable = true;
+        let mut primary_key = false;
+        let mut unique = false;
+        let mut default_value = None;
+        for option in col.options {
+            match option.option {
+                ColumnOption::Null => nullable = true,
+                ColumnOption::NotNull => nullable = false,
+                ColumnOption::Unique { is_primary, .. } => {
+                    unique = true;
+                    if is_primary {
+                        primary_key = true;
+                        nullable = false;
+                    }
+                }
+                ColumnOption::Default(expr) => {
+                    default_value = Some(self.plan_expr_to_default(expr)?);
+                }
+                _ => {}
+            }
+        }
+        Ok(ColumnDef {
+            name: col.name.value,
+            data_type,
+            nullable,
+            primary_key,
+            unique,
+            default_value,
         })
     }
 
@@ -560,6 +565,51 @@ impl LogicalPlanner {
                 })
             }
             _ => bail!("Only DROP TABLE supported"),
+        }
+    }
+
+    fn plan_alter_table(
+        &mut self,
+        name: ObjectName,
+        operations: Vec<AlterTableOperation>,
+    ) -> Result<LogicalPlan> {
+        let table_name = object_name_to_string(&name);
+        if operations.len() != 1 {
+            bail!("ALTER TABLE only supports a single operation per statement");
+        }
+        let operation = operations
+            .into_iter()
+            .next()
+            .expect("single alter operation");
+        match operation {
+            AlterTableOperation::RenameTable {
+                table_name: new_name,
+            } => Ok(LogicalPlan::AlterTableRename {
+                table_name,
+                new_table_name: object_name_to_string(&new_name),
+            }),
+            AlterTableOperation::RenameColumn {
+                old_column_name,
+                new_column_name,
+            } => Ok(LogicalPlan::AlterTableRenameColumn {
+                table_name,
+                old_column_name: old_column_name.value,
+                new_column_name: new_column_name.value,
+            }),
+            AlterTableOperation::AddColumn { column_def, .. } => {
+                let column_def = self.plan_column_def(column_def)?;
+                Ok(LogicalPlan::AlterTableAddColumn {
+                    table_name,
+                    column_def,
+                })
+            }
+            AlterTableOperation::DropColumn { column_name, .. } => {
+                Ok(LogicalPlan::AlterTableDropColumn {
+                    table_name,
+                    column_name: column_name.value,
+                })
+            }
+            _ => bail!("Unsupported ALTER TABLE operation: {:?}", operation),
         }
     }
 

@@ -64,6 +64,23 @@ pub enum LogicalPlan {
         table_name: String,
         if_exists: bool,
     },
+    AlterTableRename {
+        table_name: String,
+        new_table_name: String,
+    },
+    AlterTableRenameColumn {
+        table_name: String,
+        old_column_name: String,
+        new_column_name: String,
+    },
+    AlterTableAddColumn {
+        table_name: String,
+        column_def: ColumnDef,
+    },
+    AlterTableDropColumn {
+        table_name: String,
+        column_name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +164,7 @@ impl LogicalPlan {
                                     table: Some(a.clone()),
                                     data_type: f.data_type.clone(),
                                     nullable: f.nullable,
+                                    visible: f.visible,
                                 })
                                 .collect(),
                         )
@@ -178,6 +196,7 @@ impl LogicalPlan {
                                 table: None,
                                 data_type: DataType::Text, // Simplified
                                 nullable: true,
+                                visible: true,
                             }
                         })
                         .collect(),
@@ -200,15 +219,20 @@ impl LogicalPlan {
                 table: None,
                 data_type: DataType::Integer,
                 nullable: false,
+                visible: true,
             }]),
-            LogicalPlan::CreateTable { .. } | LogicalPlan::DropTable { .. } => {
-                Schema::new(vec![Field {
-                    name: "status".to_string(),
-                    table: None,
-                    data_type: DataType::Text,
-                    nullable: false,
-                }])
-            }
+            LogicalPlan::CreateTable { .. }
+            | LogicalPlan::DropTable { .. }
+            | LogicalPlan::AlterTableRename { .. }
+            | LogicalPlan::AlterTableRenameColumn { .. }
+            | LogicalPlan::AlterTableAddColumn { .. }
+            | LogicalPlan::AlterTableDropColumn { .. } => Schema::new(vec![Field {
+                name: "status".to_string(),
+                table: None,
+                data_type: DataType::Text,
+                nullable: false,
+                visible: true,
+            }]),
         }
     }
 
@@ -411,6 +435,35 @@ impl LogicalPlan {
                 let ie = if *if_exists { " IF EXISTS" } else { "" };
                 format!("{}DropTable{} {}", prefix, ie, table_name)
             }
+            LogicalPlan::AlterTableRename {
+                table_name,
+                new_table_name,
+            } => format!(
+                "{}AlterTable {} RENAME TO {}",
+                prefix, table_name, new_table_name
+            ),
+            LogicalPlan::AlterTableRenameColumn {
+                table_name,
+                old_column_name,
+                new_column_name,
+            } => format!(
+                "{}AlterTable {} RENAME COLUMN {} TO {}",
+                prefix, table_name, old_column_name, new_column_name
+            ),
+            LogicalPlan::AlterTableAddColumn {
+                table_name,
+                column_def,
+            } => format!(
+                "{}AlterTable {} ADD COLUMN {}",
+                prefix, table_name, column_def.name
+            ),
+            LogicalPlan::AlterTableDropColumn {
+                table_name,
+                column_name,
+            } => format!(
+                "{}AlterTable {} DROP COLUMN {}",
+                prefix, table_name, column_name
+            ),
         }
     }
 
@@ -622,6 +675,38 @@ impl LogicalPlan {
             }
             LogicalPlan::DropTable { table_name, .. } => {
                 let label = format!("DropTable: {}", table_name);
+                (label, vec![])
+            }
+            LogicalPlan::AlterTableRename {
+                table_name,
+                new_table_name,
+            } => {
+                let label = format!("AlterTable Rename {} -> {}", table_name, new_table_name);
+                (label, vec![])
+            }
+            LogicalPlan::AlterTableRenameColumn {
+                table_name,
+                old_column_name,
+                new_column_name,
+            } => {
+                let label = format!(
+                    "AlterTable {} Rename Column {} -> {}",
+                    table_name, old_column_name, new_column_name
+                );
+                (label, vec![])
+            }
+            LogicalPlan::AlterTableAddColumn {
+                table_name,
+                column_def,
+            } => {
+                let label = format!("AlterTable {} Add Column {}", table_name, column_def.name);
+                (label, vec![])
+            }
+            LogicalPlan::AlterTableDropColumn {
+                table_name,
+                column_name,
+            } => {
+                let label = format!("AlterTable {} Drop Column {}", table_name, column_name);
                 (label, vec![])
             }
         }

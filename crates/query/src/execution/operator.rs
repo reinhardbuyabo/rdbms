@@ -148,6 +148,9 @@ fn resolve_column_index(
     let mut matches = Vec::new();
 
     for (index, field) in schema.fields.iter().enumerate() {
+        if !field.visible {
+            continue;
+        }
         let base_matches = field.name.eq_ignore_ascii_case(name)
             || field
                 .name

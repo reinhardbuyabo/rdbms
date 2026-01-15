@@ -87,13 +87,18 @@ fn resolve_projection_items(
     for expr in expressions {
         match expr {
             Expr::Wildcard => {
-                for index in 0..input_schema.fields.len() {
-                    items.push(ProjectionItem::FieldIndex(index));
+                for (index, field) in input_schema.fields.iter().enumerate() {
+                    if field.visible {
+                        items.push(ProjectionItem::FieldIndex(index));
+                    }
                 }
             }
             Expr::QualifiedWildcard { table } => {
                 let mut matched = false;
                 for (index, field) in input_schema.fields.iter().enumerate() {
+                    if !field.visible {
+                        continue;
+                    }
                     let table_matches = field
                         .table
                         .as_ref()

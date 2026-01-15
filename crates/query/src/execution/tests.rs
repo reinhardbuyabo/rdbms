@@ -50,6 +50,7 @@ fn schema_for(table: &str, columns: Vec<(&str, DataType)>) -> Schema {
                 table: Some(table.to_string()),
                 data_type,
                 nullable: true,
+                visible: true,
             })
             .collect(),
     )
