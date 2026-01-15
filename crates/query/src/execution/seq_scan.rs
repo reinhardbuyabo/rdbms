@@ -2,7 +2,7 @@ use crate::execution::operator::{ExecutionError, ExecutionResult, PhysicalOperat
 use crate::execution::tuple::{Tuple, Value};
 use crate::schema::{DataType, Schema};
 use std::sync::{Arc, Mutex, MutexGuard};
-use storage::{BufferPoolManager, PAGE_SIZE, Page, PageId};
+use storage::{BufferPoolManager, Page, PageId, PAGE_SIZE};
 
 const HEADER_SIZE: usize = 16;
 const SLOT_SIZE: usize = 8;
@@ -58,12 +58,14 @@ impl TableHeap {
             let mut inserted = false;
             let mut next_page_id = None;
             let mut page_dirty = false;
+            let mut needs_new_page = false;
 
             {
                 let mut page_guard = self.fetch_page(page_id)?;
                 let mut header = read_header(&page_guard)?;
-                let available_space = header.free_space_offset as usize
-                    - (HEADER_SIZE + header.slot_count as usize * SLOT_SIZE);
+                let slot_area = HEADER_SIZE + header.slot_count as usize * SLOT_SIZE;
+                let free_space_offset = header.free_space_offset as usize;
+                let available_space = free_space_offset.saturating_sub(slot_area);
                 if available_space >= tuple_bytes.len() + SLOT_SIZE {
                     let tuple_offset =
                         (header.free_space_offset as usize - tuple_bytes.len()) as u32;
@@ -85,15 +87,10 @@ impl TableHeap {
                     write_header(&mut page_guard, &header)?;
                     inserted = true;
                     page_dirty = true;
+                } else if let Some(existing_next) = header.next_page_id {
+                    next_page_id = Some(existing_next);
                 } else {
-                    next_page_id = header.next_page_id;
-                    if next_page_id.is_none() {
-                        let new_page_id = self.allocate_page()?;
-                        header.next_page_id = Some(new_page_id);
-                        write_header(&mut page_guard, &header)?;
-                        next_page_id = Some(new_page_id);
-                        page_dirty = true;
-                    }
+                    needs_new_page = true;
                 }
             }
 
@@ -103,7 +100,24 @@ impl TableHeap {
             }
 
             self.buffer_pool.unpin_page(page_id, page_dirty)?;
-            current_page_id = next_page_id;
+
+            if needs_new_page {
+                let new_page_id = self.allocate_page()?;
+                let mut update_dirty = false;
+                {
+                    let mut page_guard = self.fetch_page(page_id)?;
+                    let mut header = read_header(&page_guard)?;
+                    if header.next_page_id.is_none() {
+                        header.next_page_id = Some(new_page_id);
+                        write_header(&mut page_guard, &header)?;
+                        update_dirty = true;
+                    }
+                }
+                self.buffer_pool.unpin_page(page_id, update_dirty)?;
+                current_page_id = Some(new_page_id);
+            } else {
+                current_page_id = next_page_id;
+            }
         }
     }
 

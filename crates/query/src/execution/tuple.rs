@@ -54,6 +54,10 @@ impl Tuple {
         self.values.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
     pub fn values(&self) -> &[Value] {
         &self.values
     }

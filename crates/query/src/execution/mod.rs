@@ -15,3 +15,6 @@ pub use planner::{Catalog, PhysicalPlanner, TableInfo};
 pub use projection::Projection;
 pub use seq_scan::{SeqScan, TableHeap};
 pub use tuple::{Tuple, Value};
+
+#[cfg(test)]
+mod tests;

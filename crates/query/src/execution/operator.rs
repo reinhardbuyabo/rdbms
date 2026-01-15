@@ -116,7 +116,7 @@ pub fn evaluate_expr(expr: &Expr, tuple: &Tuple, schema: &Schema) -> ExecutionRe
                 let comparison = apply_comparison(BinaryOperator::Eq, &value, &item_value)?;
                 match comparison {
                     Value::Boolean(true) => {
-                        return Ok(Value::Boolean(if *negated { false } else { true }));
+                        return Ok(Value::Boolean(!*negated));
                     }
                     Value::Null => saw_null = true,
                     _ => {}
@@ -125,7 +125,7 @@ pub fn evaluate_expr(expr: &Expr, tuple: &Tuple, schema: &Schema) -> ExecutionRe
             if saw_null {
                 Ok(Value::Null)
             } else {
-                Ok(Value::Boolean(if *negated { true } else { false }))
+                Ok(Value::Boolean(*negated))
             }
         }
     }
