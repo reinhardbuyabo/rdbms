@@ -127,6 +127,7 @@ dependencies = [
  "common",
  "insta",
  "sqlparser",
+ "storage",
  "thiserror 2.0.17",
 ]
 
