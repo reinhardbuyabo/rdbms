@@ -8,6 +8,7 @@ sqlparser = "0.52"
 thiserror = "2.0"
 anyhow = "1.0"
 common = { path = "../common" }
+storage = { path = "../storage" }
 
 [dev-dependencies]
 insta = "1.40"

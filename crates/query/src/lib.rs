@@ -1,9 +1,11 @@
+pub mod execution;
 pub mod expr;
 pub mod logical_plan;
 pub mod parser;
 pub mod planner;
 pub mod schema;
 
+pub use execution::{Catalog, Executor, PhysicalPlanner, TableHeap, TableInfo, Tuple, Value};
 pub use expr::{BinaryOperator, Expr, LiteralValue, UnaryOperator};
 pub use logical_plan::{
     AggregateExpr, AggregateFunction, Assignment, JoinType, LogicalPlan, SortExpr,
