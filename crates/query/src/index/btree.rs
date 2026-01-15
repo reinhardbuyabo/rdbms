@@ -2,7 +2,7 @@ use crate::execution::operator::{ExecutionError, ExecutionResult};
 use crate::execution::seq_scan::Rid;
 use crate::execution::tuple::Value;
 use std::cmp::Ordering;
-use storage::{BufferPoolManager, PAGE_SIZE, Page, PageId};
+use storage::{BufferPoolManager, Page, PageId, PAGE_SIZE};
 
 const INVALID_PAGE_ID: PageId = 0;
 const PAGE_TYPE_HEADER: u8 = 1;
