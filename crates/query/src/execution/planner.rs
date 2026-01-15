@@ -193,6 +193,27 @@ impl TableInfo {
         Ok(updated)
     }
 
+    pub fn delete_tuples(&self, filter: Option<&Expr>) -> ExecutionResult<usize> {
+        let mut deleted = 0;
+        let tuples = self.heap.scan_tuples(&self.schema)?;
+        for (rid, tuple) in tuples {
+            if let Some(predicate) = filter {
+                if !evaluate_predicate(predicate, &tuple, &self.schema)? {
+                    continue;
+                }
+            }
+            if !self.heap.delete_tuple(rid)? {
+                continue;
+            }
+            for index in &self.indexes {
+                let key = Self::key_from_tuple(&tuple, &index.column_indices, &index.key_types)?;
+                let _ = index.index.delete(&key, rid)?;
+            }
+            deleted += 1;
+        }
+        Ok(deleted)
+    }
+
     pub fn rebuild_indexes(&mut self) -> ExecutionResult<()> {
         let tuples = self.heap.scan_tuples(&self.schema)?;
         for index in &mut self.indexes {
@@ -272,6 +293,25 @@ impl Catalog {
     pub fn table_mut(&mut self, table_name: &str) -> Option<&mut TableInfo> {
         let name = normalize_name(table_name);
         self.tables.get_mut(&name)
+    }
+
+    pub fn table_names(&self) -> Vec<String> {
+        let mut names = self
+            .tables
+            .values()
+            .map(|table| table.name.clone())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    pub fn drop_table(&mut self, table_name: &str) -> ExecutionResult<()> {
+        let name = normalize_name(table_name);
+        if self.tables.remove(&name).is_some() {
+            Ok(())
+        } else {
+            Err(ExecutionError::TableNotFound(table_name.to_string()))
+        }
     }
 
     pub fn insert_tuple(&self, table_name: &str, tuple: &Tuple) -> ExecutionResult<Rid> {
