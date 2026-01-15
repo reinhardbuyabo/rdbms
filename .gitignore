@@ -20,3 +20,14 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 *.env
+
+# Local tooling
+.idea/
+.vscode/
+.DS_Store
+
+# REPL data/history
+.rdbms_history
+data
+*.db
+*.db-journal
