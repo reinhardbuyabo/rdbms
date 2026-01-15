@@ -1,12 +1,14 @@
 pub mod execution;
 pub mod expr;
+pub mod index;
 pub mod logical_plan;
 pub mod parser;
 pub mod planner;
 pub mod schema;
 
-pub use execution::{Catalog, Executor, PhysicalPlanner, TableHeap, TableInfo, Tuple, Value};
+pub use execution::{Catalog, Executor, PhysicalPlanner, Rid, TableHeap, TableInfo, Tuple, Value};
 pub use expr::{BinaryOperator, Expr, LiteralValue, UnaryOperator};
+pub use index::{BPlusTree, IndexEntry, IndexKey, IndexKeyType, IndexRange};
 pub use logical_plan::{
     AggregateExpr, AggregateFunction, Assignment, JoinType, LogicalPlan, SortExpr,
 };

@@ -507,12 +507,14 @@ impl LogicalPlanner {
                 let data_type = self.convert_data_type(&col.data_type)?;
                 let mut nullable = true;
                 let mut primary_key = false;
+                let mut unique = false;
                 let mut default_value = None;
                 for option in col.options {
                     match option.option {
                         ColumnOption::Null => nullable = true,
                         ColumnOption::NotNull => nullable = false,
                         ColumnOption::Unique { is_primary, .. } => {
+                            unique = true;
                             if is_primary {
                                 primary_key = true;
                                 nullable = false;
@@ -529,6 +531,7 @@ impl LogicalPlanner {
                     data_type,
                     nullable,
                     primary_key,
+                    unique,
                     default_value,
                 })
             })

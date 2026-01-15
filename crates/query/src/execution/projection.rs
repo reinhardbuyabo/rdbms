@@ -4,6 +4,7 @@ use crate::execution::operator::{
 use crate::execution::tuple::Tuple;
 use crate::expr::Expr;
 use crate::schema::Schema;
+use std::any::Any;
 
 pub struct Projection {
     child: Box<dyn PhysicalOperator>,
@@ -24,6 +25,10 @@ impl Projection {
             input_schema,
             resolved_items: Vec::new(),
         }
+    }
+
+    pub fn child(&self) -> &dyn PhysicalOperator {
+        &*self.child
     }
 }
 
@@ -61,6 +66,10 @@ impl PhysicalOperator for Projection {
     fn close(&mut self) -> ExecutionResult<()> {
         self.resolved_items.clear();
         self.child.close()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

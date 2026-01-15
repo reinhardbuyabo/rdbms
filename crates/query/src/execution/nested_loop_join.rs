@@ -2,6 +2,7 @@ use crate::execution::operator::{evaluate_predicate, ExecutionResult, PhysicalOp
 use crate::execution::tuple::Tuple;
 use crate::expr::Expr;
 use crate::schema::Schema;
+use std::any::Any;
 
 pub struct NestedLoopJoin {
     left: Box<dyn PhysicalOperator>,
@@ -83,5 +84,9 @@ impl PhysicalOperator for NestedLoopJoin {
         self.left.close()?;
         self.current_left = None;
         Ok(())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

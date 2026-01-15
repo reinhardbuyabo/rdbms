@@ -2,6 +2,7 @@ use crate::execution::operator::{evaluate_predicate, ExecutionResult, PhysicalOp
 use crate::execution::tuple::Tuple;
 use crate::expr::Expr;
 use crate::schema::Schema;
+use std::any::Any;
 
 pub struct Filter {
     child: Box<dyn PhysicalOperator>,
@@ -16,6 +17,10 @@ impl Filter {
             predicate,
             schema,
         }
+    }
+
+    pub fn child(&self) -> &dyn PhysicalOperator {
+        &*self.child
     }
 }
 
@@ -38,5 +43,9 @@ impl PhysicalOperator for Filter {
 
     fn close(&mut self) -> ExecutionResult<()> {
         self.child.close()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

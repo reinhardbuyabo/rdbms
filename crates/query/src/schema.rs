@@ -31,6 +31,7 @@ pub struct ColumnDef {
     pub data_type: DataType,
     pub nullable: bool,
     pub primary_key: bool,
+    pub unique: bool,
     pub default_value: Option<DefaultValue>,
 }
 

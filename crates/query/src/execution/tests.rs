@@ -1,8 +1,9 @@
 use super::{
     Catalog, ExecutionError, ExecutionResult, Executor, PhysicalOperator, PhysicalPlanner, SeqScan,
-    TableHeap, Tuple, Value,
+    TableHeap, TableInfo, Tuple, Value,
 };
 use crate::expr::{BinaryOperator, Expr, LiteralValue};
+use crate::index::{Index, IndexKey};
 use crate::logical_plan::{JoinType, LogicalPlan};
 use crate::schema::{DataType, Field, Schema};
 use std::fs;
@@ -68,13 +69,17 @@ fn build_table(
     let heap = TableHeap::create(bpm.clone())?;
     let tuples = tuples(rows);
     for tuple in &tuples {
-        heap.insert_tuple(tuple, &schema)?;
+        let _ = heap.insert_tuple(tuple, &schema)?;
     }
     Ok((schema, heap, tuples))
 }
 
 fn register_table(catalog: &mut Catalog, name: &str, schema: Schema, heap: TableHeap) {
     catalog.register_table(name.to_string(), schema, heap);
+}
+
+fn register_table_info(catalog: &mut Catalog, table: TableInfo) {
+    catalog.register_table_info(table);
 }
 
 fn scan_plan(table: &str) -> LogicalPlan {
@@ -592,4 +597,238 @@ fn schema_mismatch_errors_are_typed() -> ExecutionResult<()> {
             other
         ))),
     }
+}
+
+#[test]
+fn primary_key_violation_rejects_duplicate() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("pk_violation", 8);
+    let schema = schema_for(
+        "people",
+        vec![("id", DataType::Integer), ("name", DataType::Text)],
+    );
+    let heap = TableHeap::create(bpm.clone())?;
+    let mut table = TableInfo::new("people", schema.clone(), heap.clone());
+    table.create_index("people_pk", "id", true, true)?;
+    let mut catalog = Catalog::new();
+    register_table_info(&mut catalog, table);
+
+    let tuple = Tuple::new(vec![Value::Integer(1), Value::String("Ada".to_string())]);
+    catalog.insert_tuple("people", &tuple)?;
+    let result = catalog.insert_tuple("people", &tuple);
+    match result {
+        Err(ExecutionError::ConstraintViolation {
+            table,
+            constraint,
+            key,
+        }) => {
+            assert_eq!(table, "people");
+            assert_eq!(constraint, "people_pk");
+            assert_eq!(key, "1");
+        }
+        other => {
+            return Err(ExecutionError::Execution(format!(
+                "expected constraint violation, got {:?}",
+                other
+            )));
+        }
+    }
+
+    let results = execute_plan(scan_plan("people"), &catalog)?;
+    assert_eq!(results.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn unique_index_rejects_duplicate() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("unique_violation", 8);
+    let schema = schema_for(
+        "users",
+        vec![("id", DataType::Integer), ("email", DataType::Text)],
+    );
+    let heap = TableHeap::create(bpm.clone())?;
+    let mut table = TableInfo::new("users", schema.clone(), heap.clone());
+    table.create_index("users_email_unique", "email", true, false)?;
+    let mut catalog = Catalog::new();
+    register_table_info(&mut catalog, table);
+
+    let first = Tuple::new(vec![
+        Value::Integer(1),
+        Value::String("a@chronos.dev".to_string()),
+    ]);
+    let second = Tuple::new(vec![
+        Value::Integer(2),
+        Value::String("a@chronos.dev".to_string()),
+    ]);
+    catalog.insert_tuple("users", &first)?;
+    let result = catalog.insert_tuple("users", &second);
+    assert!(matches!(
+        result,
+        Err(ExecutionError::ConstraintViolation { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn index_lookup_returns_rid() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("index_lookup", 8);
+    let schema = schema_for("people", vec![("id", DataType::Integer)]);
+    let heap = TableHeap::create(bpm.clone())?;
+    let mut table = TableInfo::new("people", schema.clone(), heap.clone());
+    table.create_index("people_pk", "id", true, true)?;
+    let mut catalog = Catalog::new();
+    register_table_info(&mut catalog, table);
+
+    let tuple = Tuple::new(vec![Value::Integer(7)]);
+    catalog.insert_tuple("people", &tuple)?;
+
+    let table = catalog.table("people").unwrap();
+    let index = &table.indexes[0];
+    let rids = index.index.get(&IndexKey::Integer(7))?;
+    assert_eq!(rids.len(), 1);
+    let fetched = table.heap.get_tuple(rids[0], &table.schema)?;
+    assert_eq!(fetched, Some(tuple));
+    Ok(())
+}
+
+#[test]
+fn index_rebuild_preserves_constraints() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("index_rebuild", 8);
+    let schema = schema_for("people", vec![("id", DataType::Integer)]);
+    let heap = TableHeap::create(bpm.clone())?;
+    let mut table = TableInfo::new("people", schema.clone(), heap.clone());
+    table.create_index("people_pk", "id", true, true)?;
+    let mut catalog = Catalog::new();
+    register_table_info(&mut catalog, table);
+
+    let tuple = Tuple::new(vec![Value::Integer(5)]);
+    catalog.insert_tuple("people", &tuple)?;
+    catalog.table_mut("people").unwrap().rebuild_indexes()?;
+    let result = catalog.insert_tuple("people", &tuple);
+    assert!(matches!(
+        result,
+        Err(ExecutionError::ConstraintViolation { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn index_scan_equality_returns_tuple() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("index_scan_eq", 8);
+    let rows: Vec<Vec<Value>> = (0..10).map(|i| vec![Value::Integer(i)]).collect();
+    let (schema, heap, _rows) =
+        build_table(&bpm, "numbers", vec![("id", DataType::Integer)], rows)?;
+    let mut table = TableInfo::new("numbers", schema.clone(), heap.clone());
+    table.create_index("numbers_idx", "id", true, false)?;
+    let mut catalog = Catalog::new();
+    register_table_info(&mut catalog, table);
+
+    let predicate = bin(col("numbers", "id"), BinaryOperator::Eq, lit_int(4));
+    let plan = LogicalPlan::Filter {
+        input: Box::new(scan_plan("numbers")),
+        predicate,
+    };
+    let results = execute_plan(plan, &catalog)?;
+    assert_eq!(results, vec![Tuple::new(vec![Value::Integer(4)])]);
+    Ok(())
+}
+
+#[test]
+fn index_scan_projection_and_join() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("index_scan_join", 10);
+    let (cust_schema, cust_heap, _cust_rows) = build_table(
+        &bpm,
+        "customer",
+        vec![("id", DataType::Integer), ("name", DataType::Text)],
+        vec![
+            vec![Value::Integer(1), Value::String("Ada".to_string())],
+            vec![Value::Integer(2), Value::String("Linus".to_string())],
+        ],
+    )?;
+    let (order_schema, order_heap, _order_rows) = build_table(
+        &bpm,
+        "orders",
+        vec![
+            ("id", DataType::Integer),
+            ("customer_id", DataType::Integer),
+        ],
+        vec![
+            vec![Value::Integer(10), Value::Integer(1)],
+            vec![Value::Integer(11), Value::Integer(2)],
+        ],
+    )?;
+
+    let mut customer_table = TableInfo::new("customer", cust_schema.clone(), cust_heap.clone());
+    customer_table.create_index("customer_idx", "id", true, true)?;
+
+    let mut catalog = Catalog::new();
+    register_table_info(&mut catalog, customer_table);
+    register_table(&mut catalog, "orders", order_schema, order_heap);
+
+    let filter = LogicalPlan::Filter {
+        input: Box::new(scan_plan("customer")),
+        predicate: bin(col("customer", "id"), BinaryOperator::Eq, lit_int(2)),
+    };
+    let join = LogicalPlan::Join {
+        left: Box::new(filter),
+        right: Box::new(scan_plan("orders")),
+        join_type: JoinType::Inner,
+        condition: Some(bin(
+            col("customer", "id"),
+            BinaryOperator::Eq,
+            col("orders", "customer_id"),
+        )),
+    };
+    let plan = LogicalPlan::Project {
+        input: Box::new(join),
+        expressions: vec![col("customer", "name"), col("orders", "id")],
+        aliases: None,
+    };
+
+    let results = execute_plan(plan, &catalog)?;
+    assert_eq!(
+        results,
+        vec![Tuple::new(vec![
+            Value::String("Linus".to_string()),
+            Value::Integer(11)
+        ])]
+    );
+    Ok(())
+}
+
+#[test]
+fn index_scan_touches_fewer_pages_than_seq_scan() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("index_perf", 16);
+    let schema = schema_for("numbers", vec![("id", DataType::Integer)]);
+    let heap = TableHeap::create(bpm.clone())?;
+    for value in 0..10_000 {
+        let tuple = Tuple::new(vec![Value::Integer(value)]);
+        let _ = heap.insert_tuple(&tuple, &schema)?;
+    }
+
+    let mut indexed_table = TableInfo::new("numbers", schema.clone(), heap.clone());
+    indexed_table.create_index("numbers_idx", "id", true, false)?;
+
+    let mut catalog_index = Catalog::new();
+    register_table_info(&mut catalog_index, indexed_table);
+
+    let mut catalog_seq = Catalog::new();
+    register_table(&mut catalog_seq, "numbers", schema.clone(), heap.clone());
+
+    let predicate = bin(col("numbers", "id"), BinaryOperator::Eq, lit_int(9_999));
+    let plan = LogicalPlan::Filter {
+        input: Box::new(scan_plan("numbers")),
+        predicate,
+    };
+
+    bpm.reset_fetch_count();
+    let indexed_results = execute_plan(plan.clone(), &catalog_index)?;
+    let indexed_fetches = bpm.fetch_count();
+
+    bpm.reset_fetch_count();
+    let seq_results = execute_plan(plan, &catalog_seq)?;
+    let seq_fetches = bpm.fetch_count();
+
+    assert_eq!(indexed_results, seq_results);
+    assert!(indexed_fetches * 5 < seq_fetches);
+    Ok(())
 }
