@@ -2,7 +2,7 @@ use crate::execution::operator::{ExecutionError, ExecutionResult};
 use crate::execution::seq_scan::Rid;
 use crate::execution::tuple::Value;
 use std::cmp::Ordering;
-use storage::{BufferPoolManager, Page, PageId, PAGE_SIZE};
+use storage::{BufferPoolManager, PAGE_SIZE, Page, PageId};
 
 const INVALID_PAGE_ID: PageId = 0;
 const PAGE_TYPE_HEADER: u8 = 1;
@@ -90,7 +90,7 @@ impl IndexKey {
         }
         if key_types.len() == 1 {
             let value = values
-                .get(0)
+                .first()
                 .ok_or_else(|| ExecutionError::Execution("missing index key value".to_string()))?;
             return Self::from_value(value, key_types[0]);
         }
@@ -468,10 +468,7 @@ impl BPlusTree {
                 "index key types cannot be empty".to_string(),
             ));
         }
-        if key_types
-            .iter()
-            .any(|key_type| *key_type == IndexKeyType::Composite)
-        {
+        if key_types.contains(&IndexKeyType::Composite) {
             return Err(ExecutionError::Execution(
                 "composite key type cannot be nested".to_string(),
             ));
