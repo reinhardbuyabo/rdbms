@@ -153,7 +153,7 @@ version: '3.8'
 
 services:
   rdbms:
-    image: ghcr.io/reinhardbuyabo/rdbms:latest
+    image: docker.io/reinhardb/rdbms:latest
     ports:
       - "5432:5432"
     volumes:
