@@ -155,7 +155,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "console"
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "query"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "common",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror 1.0.69",
  "wal",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "txn"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "parking_lot",
 ]
@@ -807,7 +807,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "wal"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "parking_lot",
  "thiserror 1.0.69",
