@@ -30,12 +30,14 @@ fn blob_schema(table: &str) -> Schema {
             table: Some(table.to_string()),
             data_type: DataType::Integer,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "payload".to_string(),
             table: Some(table.to_string()),
             data_type: DataType::Blob,
             nullable: true,
+            visible: true,
         },
     ])
 }

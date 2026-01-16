@@ -100,6 +100,7 @@ mod tests {
             table: None,
             data_type: DataType::Text,
             nullable: true,
+            visible: true,
         }])
     }
 
@@ -115,12 +116,14 @@ mod tests {
                 table: Some("users".to_string()),
                 data_type: DataType::Integer,
                 nullable: false,
+                visible: true,
             },
             Field {
                 name: "name".to_string(),
                 table: Some("users".to_string()),
                 data_type: DataType::Text,
                 nullable: false,
+                visible: true,
             },
         ]);
         let rows = vec![Tuple::new(vec![
@@ -158,6 +161,7 @@ mod tests {
             table: None,
             data_type: DataType::Blob,
             nullable: false,
+            visible: true,
         }]);
         let blob = Value::Blob(vec![0x89, 0x50, 0x4E, 0x47]);
         let rows = vec![Tuple::new(vec![blob])];
@@ -199,6 +203,7 @@ mod tests {
             table: None,
             data_type: DataType::Integer,
             nullable: false,
+            visible: true,
         }]);
         let rows = (0..100_000)
             .map(|idx| Tuple::new(vec![Value::Integer(idx as i64)]))

@@ -11,7 +11,7 @@ use crate::execution::update::Update;
 use crate::expr::{BinaryOperator, Expr};
 use crate::index::{BPlusTree, Index, IndexKey, IndexKeyType};
 use crate::logical_plan::{Assignment, JoinType, LogicalPlan};
-use crate::schema::{DataType, Field, Schema};
+use crate::schema::{ColumnDef, DataType, Field, Schema};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -110,6 +110,113 @@ impl TableInfo {
 
     pub fn add_index(&mut self, index: IndexInfo) {
         self.indexes.push(index);
+    }
+
+    pub fn rename_table(&mut self, new_name: &str) {
+        self.name = new_name.to_string();
+        for field in &mut self.schema.fields {
+            if field.table.is_some() {
+                field.table = Some(new_name.to_string());
+            }
+        }
+    }
+
+    pub fn rename_column(&mut self, old_name: &str, new_name: &str) -> ExecutionResult<()> {
+        if old_name.eq_ignore_ascii_case(new_name) {
+            return Err(ExecutionError::Schema(format!(
+                "column {} already has that name",
+                old_name
+            )));
+        }
+        let column_index = self
+            .schema
+            .fields
+            .iter()
+            .position(|field| field.visible && field.name.eq_ignore_ascii_case(old_name))
+            .ok_or_else(|| ExecutionError::Schema(format!("column {} not found", old_name)))?;
+        if self
+            .schema
+            .fields
+            .iter()
+            .any(|field| field.name.eq_ignore_ascii_case(new_name))
+        {
+            return Err(ExecutionError::Schema(format!(
+                "column {} already exists",
+                new_name
+            )));
+        }
+        self.schema.fields[column_index].name = new_name.to_string();
+        for index in &mut self.indexes {
+            for column in &mut index.columns {
+                if column.eq_ignore_ascii_case(old_name) {
+                    *column = new_name.to_string();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn add_column(&mut self, column_def: ColumnDef) -> ExecutionResult<()> {
+        if self
+            .schema
+            .fields
+            .iter()
+            .any(|field| field.name.eq_ignore_ascii_case(&column_def.name))
+        {
+            return Err(ExecutionError::Schema(format!(
+                "column {} already exists",
+                column_def.name
+            )));
+        }
+        if !column_def.nullable {
+            return Err(ExecutionError::Schema(format!(
+                "cannot add non-nullable column {}",
+                column_def.name
+            )));
+        }
+        if column_def.primary_key || column_def.unique {
+            return Err(ExecutionError::Schema(
+                "ALTER TABLE ADD COLUMN does not support UNIQUE or PRIMARY KEY constraints"
+                    .to_string(),
+            ));
+        }
+        self.schema.fields.push(Field {
+            name: column_def.name,
+            table: Some(self.name.clone()),
+            data_type: column_def.data_type,
+            nullable: column_def.nullable,
+            visible: true,
+        });
+        Ok(())
+    }
+
+    pub fn drop_column(&mut self, column_name: &str) -> ExecutionResult<()> {
+        let column_index = self
+            .schema
+            .fields
+            .iter()
+            .position(|field| field.visible && field.name.eq_ignore_ascii_case(column_name))
+            .ok_or_else(|| ExecutionError::Schema(format!("column {} not found", column_name)))?;
+        if self.indexes.iter().any(|index| {
+            index.is_primary
+                && index
+                    .columns
+                    .iter()
+                    .any(|col| col.eq_ignore_ascii_case(column_name))
+        }) {
+            return Err(ExecutionError::Schema(format!(
+                "cannot drop primary key column {}",
+                column_name
+            )));
+        }
+        self.schema.fields[column_index].visible = false;
+        self.indexes.retain(|index| {
+            !index
+                .columns
+                .iter()
+                .any(|col| col.eq_ignore_ascii_case(column_name))
+        });
+        Ok(())
     }
 
     pub fn index_for_column(&self, column: &str) -> Option<&IndexInfo> {
@@ -314,6 +421,56 @@ impl Catalog {
         }
     }
 
+    pub fn rename_table(&mut self, table_name: &str, new_name: &str) -> ExecutionResult<()> {
+        let current_key = normalize_name(table_name);
+        let next_key = normalize_name(new_name);
+        if current_key == next_key {
+            return Err(ExecutionError::Schema(format!(
+                "table {} already has that name",
+                table_name
+            )));
+        }
+        if !self.tables.contains_key(&current_key) {
+            return Err(ExecutionError::TableNotFound(table_name.to_string()));
+        }
+        if self.tables.contains_key(&next_key) {
+            return Err(ExecutionError::Schema(format!(
+                "table {} already exists",
+                new_name
+            )));
+        }
+        let mut table = self.tables.remove(&current_key).expect("table exists");
+        table.rename_table(new_name);
+        self.tables.insert(next_key, table);
+        Ok(())
+    }
+
+    pub fn rename_column(
+        &mut self,
+        table_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> ExecutionResult<()> {
+        let table = self
+            .table_mut(table_name)
+            .ok_or_else(|| ExecutionError::TableNotFound(table_name.to_string()))?;
+        table.rename_column(old_name, new_name)
+    }
+
+    pub fn add_column(&mut self, table_name: &str, column_def: ColumnDef) -> ExecutionResult<()> {
+        let table = self
+            .table_mut(table_name)
+            .ok_or_else(|| ExecutionError::TableNotFound(table_name.to_string()))?;
+        table.add_column(column_def)
+    }
+
+    pub fn drop_column(&mut self, table_name: &str, column_name: &str) -> ExecutionResult<()> {
+        let table = self
+            .table_mut(table_name)
+            .ok_or_else(|| ExecutionError::TableNotFound(table_name.to_string()))?;
+        table.drop_column(column_name)
+    }
+
     pub fn insert_tuple(&self, table_name: &str, tuple: &Tuple) -> ExecutionResult<Rid> {
         let table = self
             .table(table_name)
@@ -499,6 +656,7 @@ fn apply_alias(schema: &Schema, alias: Option<&str>) -> Schema {
                     table: Some(alias_name.to_string()),
                     data_type: field.data_type.clone(),
                     nullable: field.nullable,
+                    visible: field.visible,
                 })
                 .collect(),
         )
@@ -515,10 +673,21 @@ fn build_projection_schema(
     let mut fields = Vec::new();
     for (index, expr) in expressions.iter().enumerate() {
         match expr {
-            Expr::Wildcard => fields.extend(input_schema.fields.clone()),
+            Expr::Wildcard => {
+                fields.extend(
+                    input_schema
+                        .fields
+                        .iter()
+                        .filter(|field| field.visible)
+                        .cloned(),
+                );
+            }
             Expr::QualifiedWildcard { table } => {
                 let mut matched = false;
                 for field in &input_schema.fields {
+                    if !field.visible {
+                        continue;
+                    }
                     let table_matches = field
                         .table
                         .as_ref()
@@ -551,6 +720,7 @@ fn build_projection_schema(
                     table: None,
                     data_type: DataType::Blob,
                     nullable: true,
+                    visible: true,
                 });
             }
             _ => {
@@ -562,6 +732,7 @@ fn build_projection_schema(
                     table: None,
                     data_type: DataType::Text,
                     nullable: true,
+                    visible: true,
                 });
             }
         }

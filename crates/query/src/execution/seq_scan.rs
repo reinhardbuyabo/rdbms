@@ -724,9 +724,8 @@ fn decode_tuple(schema: &Schema, data: &[u8], blob_store: &BlobStore) -> Executi
 
     for field in &schema.fields {
         if cursor >= data.len() {
-            return Err(ExecutionError::Execution(
-                "tuple bytes truncated".to_string(),
-            ));
+            values.push(Value::Null);
+            continue;
         }
         let is_null = data[cursor] == 1;
         cursor += 1;

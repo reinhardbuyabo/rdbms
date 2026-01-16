@@ -85,6 +85,7 @@ pub struct Field {
     pub table: Option<String>,
     pub data_type: DataType,
     pub nullable: bool,
+    pub visible: bool,
 }
 
 impl Schema {
@@ -94,20 +95,27 @@ impl Schema {
     pub fn new(fields: Vec<Field>) -> Self {
         Self { fields }
     }
+    pub fn visible_schema(&self) -> Self {
+        Self::new(self.fields.iter().filter(|f| f.visible).cloned().collect())
+    }
+    pub fn visible_fields(&self) -> impl Iterator<Item = &Field> {
+        self.fields.iter().filter(|field| field.visible)
+    }
     pub fn find_field(&self, name: &str) -> Option<&Field> {
         if let Some(field) = self
             .fields
             .iter()
-            .find(|f| f.name.eq_ignore_ascii_case(name))
+            .find(|f| f.visible && f.name.eq_ignore_ascii_case(name))
         {
             return Some(field);
         }
         if let Some(field) = self.fields.iter().find(|f| {
-            f.name
-                .split('.')
-                .next_back()
-                .unwrap_or("")
-                .eq_ignore_ascii_case(name)
+            f.visible
+                && f.name
+                    .split('.')
+                    .next_back()
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case(name)
         }) {
             return Some(field);
         }
@@ -116,6 +124,6 @@ impl Schema {
     pub fn field_index(&self, name: &str) -> Option<usize> {
         self.fields
             .iter()
-            .position(|f| f.name.eq_ignore_ascii_case(name))
+            .position(|f| f.visible && f.name.eq_ignore_ascii_case(name))
     }
 }
