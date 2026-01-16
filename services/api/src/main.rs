@@ -1,5 +1,5 @@
 use actix_cors::Cors;
-use actix_web::{App, HttpServer, middleware, web};
+use actix_web::{middleware, web, App, HttpServer};
 use anyhow::{Context, Result as AnyhowResult};
 use db::engine::Engine;
 use std::collections::HashMap;

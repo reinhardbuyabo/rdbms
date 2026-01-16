@@ -1,8 +1,8 @@
-use actix_web::{HttpResponse, Result, web};
+use actix_web::{web, HttpResponse, Result};
 use db::printer::{ReplOutput, SerializableValue};
 
-use crate::AppState;
 use crate::models::*;
+use crate::AppState;
 
 pub async fn health() -> Result<HttpResponse> {
     let response = HealthResponse {
