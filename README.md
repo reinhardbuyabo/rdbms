@@ -5,6 +5,7 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 ![CI](https://github.com/reinhardbuyabo/rdbms/workflows/CI/badge.svg)
 ![License](https://img.shields.io/github/license/reinhardbuyabo/rdbms)
 ![Version](https://img.shields.io/github/v/release/reinhardbuyabo/rdbms)
+- ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/reinhardbuyabo/rdbms?utm_source=oss&utm_medium=github&utm_campaign=reinhardbuyabo%2Frdbms&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 ## Features
 
@@ -18,6 +19,43 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 
 ## Architecture
 
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Application                               │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │   REPL CLI  │  │  TCP Server │  │     Library (lib)       │  │
+│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
+├─────────┼────────────────┼─────────────────────┼─────────────────┤
+│         │                │                     │                 │
+│         ▼                ▼                     ▼                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                         Engine                             │  │
+│  ├───────────────────────────────────────────────────────────┤  │
+│  │  ┌───────────┐  ┌───────────┐  ┌─────────────────────────┐│  │
+│  │  │  Catalog  │  │   Lock    │  │   TransactionManager    ││  │
+│  │  │           │  │  Manager  │  │                         ││  │
+│  │  └───────────┘  └───────────┘  └─────────────────────────┘│  │
+│  │  ┌───────────┐  ┌───────────┐  ┌─────────────────────────┐│  │
+│  │  │   Query   │  │  Recovery │  │    BufferPoolManager    ││  │
+│  │  │   Engine  │  │  Manager  │  │                         ││  │
+│  │  └───────────┘  └───────────┘  └─────────────────────────┘│  │
+│  └───────────────────────────────────────────────────────────┘  │
+│         │                │                     │                 │
+│         ▼                ▼                     ▼                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                Storage (Disk + Buffer Pool)                │  │
+│  ├───────────────────────────────────────────────────────────┤  │
+│  │  ┌─────────────┐  ┌─────────────────────────────────────┐ │  │
+│  │  │ Page Format │  │         B+Tree Index Pages          │ │  │
+│  │  └─────────────┘  └─────────────────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│                                                                  │
+│                           ▼                                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                Write-Ahead Log (WAL)                       │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Application                           │
@@ -93,7 +131,7 @@ The RDBMS TCP server accepts JSON-RPC style requests:
 {"status": "ok", "result": {...}, "error": null}
 
 // Response format (error)
-{"status": "error": null, "", "resulterror": "error message"}
+{"status": "error", "result": null, "error": "error message"}
 ```
 
 **Example with Python:**
@@ -326,7 +364,7 @@ rdbms/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml            # CI/CD pipeline
-│       └── pr-check.yml            # CI/CD pipeline
+│       └── pr-check.yml      # CI/CD pipeline
 └── tests/                    # Integration tests
 ```
 
@@ -347,4 +385,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Rust](https://www.rust-lang.org/) - Systems programming language
 - [tokio](https://tokio.rs/) - Async runtime
 - [parking_lot](https://github.com/Amanieu/parking_lot) - Synchronization primitives
-- ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/reinhardbuyabo/rdbms?utm_source=oss&utm_medium=github&utm_campaign=reinhardbuyabo%2Frdbms&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
