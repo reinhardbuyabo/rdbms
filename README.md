@@ -5,7 +5,7 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 ![CI](https://github.com/reinhardbuyabo/rdbms/workflows/CI/badge.svg)
 ![License](https://img.shields.io/github/license/reinhardbuyabo/rdbms)
 ![Version](https://img.shields.io/github/v/release/reinhardbuyabo/rdbms)
-- ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/reinhardbuyabo/rdbms?utm_source=oss&utm_medium=github&utm_campaign=reinhardbuyabo%2Frdbms&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/reinhardbuyabo/rdbms?utm_source=oss&utm_medium=github&utm_campaign=reinhardbuyabo%2Frdbms&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 ## Features
 
