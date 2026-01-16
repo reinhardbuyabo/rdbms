@@ -74,11 +74,15 @@ async fn handle_client(mut stream: TcpStream, engine: Arc<Mutex<Engine>>) -> Res
             let mut engine_guard = engine.lock().map_err(|e| anyhow::anyhow!("{}", e))?;
             match request.method.as_str() {
                 "execute" => {
-                    let sql = request
-                        .params
-                        .clone()
-                        .and_then(|p| p.as_str().map(|s| s.to_string()))
-                        .unwrap_or_default();
+                    let sql = match &request.params {
+                        Some(serde_json::Value::Array(arr)) => arr
+                            .first()
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        Some(serde_json::Value::String(s)) => s.clone(),
+                        _ => String::new(),
+                    };
                     match engine_guard.execute_sql(&sql) {
                         Ok(output) => Response {
                             status: "ok".to_string(),

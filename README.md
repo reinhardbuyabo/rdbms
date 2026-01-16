@@ -2,9 +2,9 @@
 
 A lightweight, embedded RDBMS written in Rust with full ACID transaction support, B+Tree indexes, and Write-Ahead Logging.
 
-![CI](https://github.com/anomalyco/rdbms/workflows/CI/badge.svg)
-![License](https://img.shields.io/github/license/anomalyco/rdbms)
-![Version](https://img.shields.io/github/v/release/anomalyco/rdbms)
+![CI](https://github.com/reinhardbuyabo/rdbms/workflows/CI/badge.svg)
+![License](https://img.shields.io/github/license/reinhardbuyabo/rdbms)
+![Version](https://img.shields.io/github/v/release/reinhardbuyabo/rdbms)
 
 ## Features
 
@@ -68,31 +68,79 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 
 ```bash
 # Clone the repository
-git clone https://github.com/anomalyco/rdbms.git
+git clone https://github.com/reinhardbuyabo/rdbms.git
 cd rdbms
 
-# Build the project
+# Build all binaries
 cargo build --release
 
 # Run the REPL
 ./target/release/rdbms --db ./mydb
 
-# Run as TCP server
+# Run as TCP server (default port 5432)
 ./target/release/rdbmsd --db ./mydb --listen 0.0.0.0:5432
+```
+
+### TCP Server API
+
+The RDBMS TCP server accepts JSON-RPC style requests:
+
+```json
+// Request format
+{"method": "execute", "params": ["SQL_STATEMENT"]}
+
+// Response format (success)
+{"status": "ok", "result": {...}, "error": null}
+
+// Response format (error)
+{"status": "error": null, "", "resulterror": "error message"}
+```
+
+**Example with Python:**
+
+```python
+import socket
+import json
+
+def execute(sql):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    sock.connect(('127.0.0.1', 5432))
+    request = {"method": "execute", "params": [sql]}
+    sock.sendall(json.dumps(request).encode())
+    sock.shutdown(socket.SHUT_WR)
+    response = sock.recv(16384)
+    sock.close()
+    return json.loads(response.decode())
+
+# Usage examples
+execute("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")
+execute("INSERT INTO users VALUES (1, 'Alice')")
+execute("SELECT * FROM users")
+```
+
+**Example with netcat:**
+
+```bash
+# Ping
+echo '{"method":"ping"}' | nc -w 2 127.0.0.1 5432
+
+# Execute SQL
+echo '{"method":"execute","params":["SELECT * FROM users"]}' | nc -w 2 127.0.0.1 5432
 ```
 
 ### Using Docker
 
 ```bash
-# Pull the latest image
-docker pull ghcr.io/anomalyco/rdbms:latest
+# Build the image
+docker build -t rdbms:latest .
 
 # Run the server
 docker run -d \
   --name rdbms \
   -p 5432:5432 \
   -v /path/to/data:/data \
-  ghcr.io/anomalyco/rdbms:latest
+  rdbms:latest
 
 # Connect to the server
 docker exec -it rdbms rdbms --db /data
@@ -105,7 +153,7 @@ version: '3.8'
 
 services:
   rdbms:
-    image: ghcr.io/anomalyco/rdbms:latest
+    image: ghcr.io/reinhardbuyabo/rdbms:latest
     ports:
       - "5432:5432"
     volumes:
@@ -278,6 +326,7 @@ rdbms/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml            # CI/CD pipeline
+│       └── pr-check.yml            # CI/CD pipeline
 └── tests/                    # Integration tests
 ```
 
@@ -298,3 +347,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Rust](https://www.rust-lang.org/) - Systems programming language
 - [tokio](https://tokio.rs/) - Async runtime
 - [parking_lot](https://github.com/Amanieu/parking_lot) - Synchronization primitives
+- ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/reinhardbuyabo/rdbms?utm_source=oss&utm_medium=github&utm_campaign=reinhardbuyabo%2Frdbms&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
