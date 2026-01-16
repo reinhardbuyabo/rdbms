@@ -9,6 +9,7 @@ use query::{
     RecoveryManager, Schema, TableHeap, TableInfo, Tuple, Value, sql_to_logical_plan,
 };
 use storage::{BufferPoolManager, DiskManager};
+use txn::{DeadlockPolicy, LockManager};
 use wal::{LogManager, TransactionManager};
 
 use crate::printer::ReplOutput;
@@ -20,6 +21,8 @@ pub struct Engine {
     buffer_pool: BufferPoolManager,
     #[allow(dead_code)]
     log_manager: Arc<LogManager>,
+    #[allow(dead_code)]
+    lock_manager: Arc<LockManager>,
     txn_manager: TransactionManager,
     recovery: RecoveryManager,
     #[allow(dead_code)]
@@ -40,12 +43,19 @@ impl Engine {
             pool_size,
             Some(Arc::clone(&log_manager)),
         );
-        let txn_manager = TransactionManager::new(Arc::clone(&log_manager));
+        let lock_manager = Arc::new(LockManager::new(DeadlockPolicy::Timeout(
+            std::time::Duration::from_secs(1),
+        )));
+        let txn_manager = TransactionManager::with_lock_manager(
+            Arc::clone(&log_manager),
+            Arc::clone(&lock_manager),
+        );
         let recovery = RecoveryManager::new(Arc::clone(&log_manager), &wal_path);
         let engine = Self {
             catalog: Catalog::new(),
             buffer_pool,
             log_manager,
+            lock_manager,
             txn_manager,
             recovery,
             wal_path,

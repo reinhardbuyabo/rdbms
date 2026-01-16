@@ -1,4 +1,7 @@
 use comfy_table::{Cell, Table};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
 use query::{Schema, Tuple, Value};
 
 const MAX_DISPLAY_ROWS: usize = 100;
@@ -7,6 +10,45 @@ const MAX_DISPLAY_ROWS: usize = 100;
 pub enum ReplOutput {
     Rows { schema: Schema, rows: Vec<Tuple> },
     Message(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SerializableRow {
+    pub values: Vec<SerializableValue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum SerializableValue {
+    Null,
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+impl From<Value> for SerializableValue {
+    fn from(v: Value) -> Self {
+        match v {
+            Value::Null => SerializableValue::Null,
+            Value::Integer(n) => SerializableValue::Int(n),
+            Value::Float(f) => SerializableValue::Float(f),
+            Value::Boolean(b) => SerializableValue::Bool(b),
+            Value::String(s) => SerializableValue::Text(s),
+            Value::Blob(bytes) => SerializableValue::Blob(bytes),
+            Value::Timestamp(ts) => SerializableValue::Int(ts),
+        }
+    }
+}
+
+impl fmt::Display for ReplOutput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReplOutput::Rows { schema, rows } => write!(f, "{}", format_table(schema, rows)),
+            ReplOutput::Message(message) => write!(f, "{}", message),
+        }
+    }
 }
 
 pub fn format_output(output: &ReplOutput) -> String {

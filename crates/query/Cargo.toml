@@ -10,6 +10,7 @@ anyhow = "1.0"
 common = { path = "../common" }
 storage = { path = "../storage" }
 wal = { path = "../wal" }
+txn = { path = "../txn" }
 parking_lot = "0.12"
 
 [dev-dependencies]

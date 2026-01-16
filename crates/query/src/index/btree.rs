@@ -3,6 +3,7 @@ use crate::execution::seq_scan::Rid;
 use crate::execution::tuple::Value;
 use std::cmp::Ordering;
 use storage::{BufferPoolManager, Page, PageId, PAGE_LSN_SIZE, PAGE_SIZE};
+use txn::{LockKey, LockMode, TxnId};
 
 const INVALID_PAGE_ID: PageId = 0;
 const PAGE_TYPE_HEADER: u8 = 1;
@@ -483,7 +484,7 @@ impl BPlusTree {
         let root_page_id = allocate_page(&buffer_pool)?;
 
         {
-            let mut header_guard = fetch_page(&buffer_pool, header_page_id)?;
+            let mut header_guard = fetch_page(&buffer_pool, header_page_id, LockMode::Exclusive)?;
             init_header_page(
                 &mut header_guard,
                 root_page_id,
@@ -497,7 +498,7 @@ impl BPlusTree {
         buffer_pool.unpin_page(header_page_id, true)?;
 
         {
-            let mut root_guard = fetch_page(&buffer_pool, root_page_id)?;
+            let mut root_guard = fetch_page(&buffer_pool, root_page_id, LockMode::Exclusive)?;
             init_leaf_page(&mut root_guard, None, None)?;
         }
         buffer_pool.unpin_page(root_page_id, true)?;
@@ -514,7 +515,7 @@ impl BPlusTree {
 
     pub fn open(buffer_pool: BufferPoolManager, header_page_id: PageId) -> ExecutionResult<Self> {
         let (key_types, key_size, text_key_size, unique) = {
-            let header_guard = fetch_page(&buffer_pool, header_page_id)?;
+            let header_guard = fetch_page(&buffer_pool, header_page_id, LockMode::Shared)?;
             let key_type =
                 IndexKeyType::from_byte(read_u8(&header_guard, HEADER_KEY_TYPE_OFFSET)?)?;
             let key_size = read_u16(&header_guard, HEADER_KEY_SIZE_OFFSET)? as usize;
@@ -602,7 +603,7 @@ impl BPlusTree {
     pub fn root_is_leaf(&self) -> ExecutionResult<bool> {
         let root_page_id = self.root_page_id()?;
         let page_type = {
-            let root_guard = fetch_page(&self.buffer_pool, root_page_id)?;
+            let root_guard = fetch_page(&self.buffer_pool, root_page_id, LockMode::Shared)?;
             read_page_type(&root_guard)?
         };
         self.buffer_pool.unpin_page(root_page_id, false)?;
@@ -614,7 +615,7 @@ impl BPlusTree {
         let mut page_id = self.root_page_id()?;
         loop {
             let (page_type, left_child) = {
-                let page_guard = fetch_page(&self.buffer_pool, page_id)?;
+                let page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Shared)?;
                 let page_type = read_page_type(&page_guard)?;
                 let left_child = match page_type {
                     PageType::Internal => {
@@ -654,7 +655,8 @@ impl BPlusTree {
 
     fn root_page_id(&self) -> ExecutionResult<PageId> {
         let root = {
-            let header_guard = fetch_page(&self.buffer_pool, self.header_page_id)?;
+            let header_guard =
+                fetch_page(&self.buffer_pool, self.header_page_id, LockMode::Shared)?;
             read_u64(&header_guard, HEADER_ROOT_OFFSET)?
         };
         self.buffer_pool.unpin_page(self.header_page_id, false)?;
@@ -663,7 +665,8 @@ impl BPlusTree {
 
     fn set_root_page_id(&self, root_page_id: PageId) -> ExecutionResult<()> {
         {
-            let mut header_guard = fetch_page(&self.buffer_pool, self.header_page_id)?;
+            let mut header_guard =
+                fetch_page(&self.buffer_pool, self.header_page_id, LockMode::Exclusive)?;
             write_u64(&mut header_guard, HEADER_ROOT_OFFSET, root_page_id)?;
         }
         self.buffer_pool.unpin_page(self.header_page_id, true)?;
@@ -678,7 +681,7 @@ impl BPlusTree {
         let mut page_id = self.root_page_id()?;
         loop {
             let (page_type, next_id) = {
-                let page_guard = fetch_page(&self.buffer_pool, page_id)?;
+                let page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Shared)?;
                 let page_type = read_page_type(&page_guard)?;
                 let next_id = match page_type {
                     PageType::Leaf => None,
@@ -715,7 +718,7 @@ impl BPlusTree {
 
     fn read_leaf_entries(&self, page_id: PageId) -> ExecutionResult<(LeafPage, Vec<IndexEntry>)> {
         let (leaf_page, entries) = {
-            let page_guard = fetch_page(&self.buffer_pool, page_id)?;
+            let page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Shared)?;
             let leaf_page = read_leaf_page(&page_guard)?;
             let entries = read_leaf_entries(
                 &page_guard,
@@ -736,7 +739,7 @@ impl BPlusTree {
         entries: &[IndexEntry],
     ) -> ExecutionResult<()> {
         {
-            let mut page_guard = fetch_page(&self.buffer_pool, page_id)?;
+            let mut page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Exclusive)?;
             write_leaf_page(
                 &mut page_guard,
                 leaf_page,
@@ -752,7 +755,7 @@ impl BPlusTree {
 
     fn read_internal_page(&self, page_id: PageId) -> ExecutionResult<InternalPage> {
         let internal = {
-            let page_guard = fetch_page(&self.buffer_pool, page_id)?;
+            let page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Shared)?;
             read_internal_page(
                 &page_guard,
                 &self.key_types,
@@ -766,7 +769,7 @@ impl BPlusTree {
 
     fn write_internal_page(&self, page_id: PageId, internal: &InternalPage) -> ExecutionResult<()> {
         {
-            let mut page_guard = fetch_page(&self.buffer_pool, page_id)?;
+            let mut page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Exclusive)?;
             write_internal_page(
                 &mut page_guard,
                 internal,
@@ -781,7 +784,7 @@ impl BPlusTree {
 
     fn set_parent(&self, page_id: PageId, parent: Option<PageId>) -> ExecutionResult<()> {
         {
-            let mut page_guard = fetch_page(&self.buffer_pool, page_id)?;
+            let mut page_guard = fetch_page(&self.buffer_pool, page_id, LockMode::Exclusive)?;
             write_parent_page_id(&mut page_guard, parent)?;
         }
         self.buffer_pool.unpin_page(page_id, true)?;
@@ -832,7 +835,7 @@ impl BPlusTree {
         right_page_id: PageId,
     ) -> ExecutionResult<()> {
         let parent_id = {
-            let left_guard = fetch_page(&self.buffer_pool, left_page_id)?;
+            let left_guard = fetch_page(&self.buffer_pool, left_page_id, LockMode::Shared)?;
             read_parent_page_id(&left_guard)?
         };
         self.buffer_pool.unpin_page(left_page_id, false)?;
@@ -933,12 +936,26 @@ impl crate::index::Index for BPlusTree {
             }
         }
         let leaf_page_id = self.find_leaf_page(Some(&key), true)?;
+        if let (Some(lock_manager), Some(txn_id)) =
+            (wal::current_lock_manager(), wal::current_txn_id())
+        {
+            lock_manager
+                .lock_exclusive(TxnId(txn_id), LockKey::Page(leaf_page_id))
+                .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?;
+        }
         self.insert_into_leaf(leaf_page_id, key, rid)
     }
 
     fn delete(&self, key: &IndexKey, rid: Rid) -> ExecutionResult<bool> {
         let mut page_id = self.find_leaf_page(Some(key), false)?;
         loop {
+            if let (Some(lock_manager), Some(txn_id)) =
+                (wal::current_lock_manager(), wal::current_txn_id())
+            {
+                lock_manager
+                    .lock_exclusive(TxnId(txn_id), LockKey::Page(page_id))
+                    .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?;
+            }
             let (leaf_page, mut entries) = self.read_leaf_entries(page_id)?;
             if let Some(position) = entries
                 .iter()
@@ -999,7 +1016,20 @@ fn allocate_page(buffer_pool: &BufferPoolManager) -> ExecutionResult<PageId> {
 fn fetch_page<'a>(
     buffer_pool: &'a BufferPoolManager,
     page_id: PageId,
+    mode: LockMode,
 ) -> ExecutionResult<storage::PageGuard<'a>> {
+    if let (Some(lock_manager), Some(txn_id)) = (wal::current_lock_manager(), wal::current_txn_id())
+    {
+        let txn_id = TxnId(txn_id);
+        match mode {
+            LockMode::Shared => lock_manager
+                .lock_shared(txn_id, LockKey::Page(page_id))
+                .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?,
+            LockMode::Exclusive => lock_manager
+                .lock_exclusive(txn_id, LockKey::Page(page_id))
+                .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?,
+        }
+    }
     buffer_pool
         .fetch_page(page_id)?
         .ok_or_else(|| ExecutionError::Execution("buffer pool has no available frame".to_string()))

@@ -5,7 +5,9 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
+
 use thiserror::Error;
+use txn::LockManager;
 
 pub type Lsn = u64;
 pub type TxnId = u64;
@@ -316,6 +318,7 @@ pub type TransactionHandle = Arc<Mutex<Transaction>>;
 #[derive(Clone)]
 pub struct TransactionManager {
     log_manager: Arc<LogManager>,
+    lock_manager: Option<Arc<LockManager>>,
     next_txn_id: Arc<AtomicU64>,
 }
 
@@ -323,12 +326,25 @@ impl TransactionManager {
     pub fn new(log_manager: Arc<LogManager>) -> Self {
         Self {
             log_manager,
+            lock_manager: None,
+            next_txn_id: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    pub fn with_lock_manager(log_manager: Arc<LogManager>, lock_manager: Arc<LockManager>) -> Self {
+        Self {
+            log_manager,
+            lock_manager: Some(lock_manager),
             next_txn_id: Arc::new(AtomicU64::new(1)),
         }
     }
 
     pub fn log_manager(&self) -> Arc<LogManager> {
         Arc::clone(&self.log_manager)
+    }
+
+    pub fn lock_manager(&self) -> Option<Arc<LockManager>> {
+        self.lock_manager.clone()
     }
 
     pub fn begin(&self) -> WalResult<TransactionHandle> {
@@ -343,6 +359,7 @@ impl TransactionManager {
     }
 
     pub fn commit(&self, txn: &TransactionHandle) -> WalResult<()> {
+        let txn_id = txn.lock().txn_id;
         let mut guard = txn.lock();
         let lsn = self
             .log_manager
@@ -355,24 +372,39 @@ impl TransactionManager {
             .log_manager
             .append(LogRecord::end(0, guard.txn_id, guard.last_lsn))?;
         guard.last_lsn = Some(end_lsn);
-        self.log_manager.flush(end_lsn)
+        self.log_manager.flush(end_lsn)?;
+        drop(guard);
+        if let Some(lock_manager) = &self.lock_manager {
+            lock_manager.unlock_all(txn::TxnId(txn_id));
+        }
+        Ok(())
     }
 
     pub fn abort(&self, txn: &TransactionHandle) -> WalResult<()> {
+        let txn_id = txn.lock().txn_id;
         let mut guard = txn.lock();
         let lsn = self
             .log_manager
             .append(LogRecord::abort(0, guard.txn_id, guard.last_lsn))?;
         guard.last_lsn = Some(lsn);
+        drop(guard);
+        if let Some(lock_manager) = &self.lock_manager {
+            lock_manager.unlock_all(txn::TxnId(txn_id));
+        }
         Ok(())
     }
 
     pub fn end(&self, txn: &TransactionHandle) -> WalResult<()> {
+        let txn_id = txn.lock().txn_id;
         let mut guard = txn.lock();
         let lsn = self
             .log_manager
             .append(LogRecord::end(0, guard.txn_id, guard.last_lsn))?;
         guard.last_lsn = Some(lsn);
+        drop(guard);
+        if let Some(lock_manager) = &self.lock_manager {
+            lock_manager.unlock_all(txn::TxnId(txn_id));
+        }
         Ok(())
     }
 
@@ -380,7 +412,8 @@ impl TransactionManager {
     where
         F: FnOnce() -> R,
     {
-        let guard = set_transaction_context(self.log_manager(), Arc::clone(txn));
+        let guard =
+            set_transaction_context(self.log_manager(), Arc::clone(txn), self.lock_manager());
         let result = f();
         drop(guard);
         result
@@ -395,6 +428,7 @@ pub struct TransactionGuard {
 struct TransactionContext {
     log_manager: Arc<LogManager>,
     transaction: TransactionHandle,
+    lock_manager: Option<Arc<LockManager>>,
 }
 
 thread_local! {
@@ -404,14 +438,40 @@ thread_local! {
 fn set_transaction_context(
     log_manager: Arc<LogManager>,
     transaction: TransactionHandle,
+    lock_manager: Option<Arc<LockManager>>,
 ) -> TransactionGuard {
     let previous = CURRENT_TXN.with(|cell| {
         cell.replace(Some(TransactionContext {
             log_manager,
             transaction,
+            lock_manager,
         }))
     });
     TransactionGuard { previous }
+}
+
+pub fn current_txn_id() -> Option<TxnId> {
+    CURRENT_TXN.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|ctx| ctx.transaction.lock().txn_id)
+    })
+}
+
+pub fn current_txn_handle() -> Option<TransactionHandle> {
+    CURRENT_TXN.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map(|ctx| Arc::clone(&ctx.transaction))
+    })
+}
+
+pub fn current_lock_manager() -> Option<Arc<LockManager>> {
+    CURRENT_TXN.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|ctx| ctx.lock_manager.clone())
+    })
 }
 
 impl Drop for TransactionGuard {
