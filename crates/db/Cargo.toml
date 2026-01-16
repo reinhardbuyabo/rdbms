@@ -1,10 +1,10 @@
 [package]
 name = "db"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Embedded RDBMS with ACID transactions, B+Tree indexes, and WAL"
-repository = "https://github.com/anomalyco/rdbms"
-homepage = "https://github.com/anomalyco/rdbms"
+repository = "https://github.com/reinhardbuyabo/rdbms"
+homepage = "https://github.com/reinhardbuyabo/rdbms"
 license = "MIT"
 authors = ["Your Name <your@email.com>"]
 

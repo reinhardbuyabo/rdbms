@@ -10,7 +10,6 @@
 
 # Build artifacts
 target/
-Cargo.lock
 
 # Test files
 tests/
@@ -30,3 +29,8 @@ Thumbs.db
 # Misc
 *.log
 .env
+
+# Docs directory
+docs/
+test_rdbms.py
+test_rdbms.sh

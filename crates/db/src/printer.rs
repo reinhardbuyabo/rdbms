@@ -18,14 +18,26 @@ pub struct SerializableRow {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", content = "value")]
 pub enum SerializableValue {
     Null,
+    #[serde(rename = "int", serialize_with = "serialize_int")]
     Int(i64),
+    #[serde(rename = "float")]
     Float(f64),
+    #[serde(rename = "bool")]
     Bool(bool),
+    #[serde(rename = "text")]
     Text(String),
+    #[serde(rename = "blob")]
     Blob(Vec<u8>),
+}
+
+fn serialize_int<S>(val: &i64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_i64(*val)
 }
 
 impl From<Value> for SerializableValue {
