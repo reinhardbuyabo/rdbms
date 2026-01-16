@@ -29,5 +29,6 @@ target
 # REPL data/history
 .rdbms_history
 data
+data.wal
 *.db
 *.db-journal
