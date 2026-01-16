@@ -8,6 +8,7 @@ pub enum Value {
     String(String),
     Boolean(bool),
     Timestamp(i64),
+    Blob(Vec<u8>),
 }
 
 impl Value {
@@ -24,6 +25,7 @@ impl From<LiteralValue> for Value {
             LiteralValue::Float(number) => Value::Float(number),
             LiteralValue::String(text) => Value::String(text),
             LiteralValue::Boolean(flag) => Value::Boolean(flag),
+            LiteralValue::Blob(bytes) => Value::Blob(bytes),
         }
     }
 }
@@ -36,6 +38,7 @@ impl From<&LiteralValue> for Value {
             LiteralValue::Float(number) => Value::Float(*number),
             LiteralValue::String(text) => Value::String(text.clone()),
             LiteralValue::Boolean(flag) => Value::Boolean(*flag),
+            LiteralValue::Blob(bytes) => Value::Blob(bytes.clone()),
         }
     }
 }

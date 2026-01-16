@@ -1,13 +1,15 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use query::execution::operator::evaluate_expr;
 use query::{
-    Catalog, ColumnDef, DataType, Executor, Expr, Field, LogicalPlan, PhysicalPlanner, Schema,
-    TableHeap, TableInfo, Tuple, Value, sql_to_logical_plan,
+    Catalog, ColumnDef, DataType, Executor, Expr, Field, LogicalPlan, PhysicalPlanner,
+    RecoveryManager, Schema, TableHeap, TableInfo, Tuple, Value, sql_to_logical_plan,
 };
 use storage::{BufferPoolManager, DiskManager};
+use wal::{LogManager, TransactionManager};
 
 use crate::printer::ReplOutput;
 
@@ -16,6 +18,12 @@ const DEFAULT_POOL_SIZE: usize = 64;
 pub struct Engine {
     catalog: Catalog,
     buffer_pool: BufferPoolManager,
+    #[allow(dead_code)]
+    log_manager: Arc<LogManager>,
+    txn_manager: TransactionManager,
+    recovery: RecoveryManager,
+    #[allow(dead_code)]
+    wal_path: PathBuf,
 }
 
 impl Engine {
@@ -25,15 +33,54 @@ impl Engine {
 
     pub fn new_with_pool(db_path: &Path, pool_size: usize) -> Result<Self> {
         let disk_manager = DiskManager::open(db_path).context("open database file")?;
-        let buffer_pool = BufferPoolManager::new(disk_manager, pool_size);
-        Ok(Self {
+        let wal_path = db_path.with_extension("wal");
+        let log_manager = Arc::new(LogManager::open(&wal_path).context("open wal file")?);
+        let buffer_pool = BufferPoolManager::new_with_log(
+            disk_manager,
+            pool_size,
+            Some(Arc::clone(&log_manager)),
+        );
+        let txn_manager = TransactionManager::new(Arc::clone(&log_manager));
+        let recovery = RecoveryManager::new(Arc::clone(&log_manager), &wal_path);
+        let engine = Self {
             catalog: Catalog::new(),
             buffer_pool,
-        })
+            log_manager,
+            txn_manager,
+            recovery,
+            wal_path,
+        };
+        engine.recovery.recover(&engine.buffer_pool)?;
+        Ok(engine)
     }
 
     pub fn execute_sql(&mut self, sql: &str) -> Result<ReplOutput> {
         let plan = sql_to_logical_plan(sql)?;
+        let txn = self.txn_manager.begin().context("begin transaction")?;
+        let txn_manager = self.txn_manager.clone();
+        let result = txn_manager.with_transaction(&txn, || self.execute_plan(plan));
+        match result {
+            Ok(output) => {
+                self.txn_manager
+                    .commit(&txn)
+                    .context("commit transaction")?;
+                Ok(output)
+            }
+            Err(error) => {
+                self.txn_manager.abort(&txn).context("abort transaction")?;
+                self.recovery
+                    .rollback_transaction(&self.buffer_pool, &txn)
+                    .context("rollback transaction")?;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn list_tables(&self) -> Vec<String> {
+        self.catalog.table_names()
+    }
+
+    fn execute_plan(&mut self, plan: LogicalPlan) -> Result<ReplOutput> {
         match plan {
             LogicalPlan::CreateTable {
                 table_name,
@@ -44,6 +91,23 @@ impl Engine {
                 table_name,
                 if_exists,
             } => self.drop_table(&table_name, if_exists),
+            LogicalPlan::AlterTableRename {
+                table_name,
+                new_table_name,
+            } => self.alter_table_rename(&table_name, &new_table_name),
+            LogicalPlan::AlterTableRenameColumn {
+                table_name,
+                old_column_name,
+                new_column_name,
+            } => self.alter_table_rename_column(&table_name, &old_column_name, &new_column_name),
+            LogicalPlan::AlterTableAddColumn {
+                table_name,
+                column_def,
+            } => self.alter_table_add_column(&table_name, &column_def),
+            LogicalPlan::AlterTableDropColumn {
+                table_name,
+                column_name,
+            } => self.alter_table_drop_column(&table_name, &column_name),
             LogicalPlan::Insert {
                 table_name,
                 columns,
@@ -58,14 +122,10 @@ impl Engine {
         }
     }
 
-    pub fn list_tables(&self) -> Vec<String> {
-        self.catalog.table_names()
-    }
-
     pub fn table_schema(&self, table_name: &str) -> Option<Schema> {
         self.catalog
             .table(table_name)
-            .map(|table| table.schema.clone())
+            .map(|table| table.schema.visible_schema())
     }
 
     fn create_table(
@@ -89,6 +149,7 @@ impl Engine {
                     table: Some(table_name.to_string()),
                     data_type: column.data_type.clone(),
                     nullable: column.nullable,
+                    visible: true,
                 })
                 .collect(),
         );
@@ -121,6 +182,47 @@ impl Engine {
         }
     }
 
+    fn alter_table_rename(&mut self, table_name: &str, new_table_name: &str) -> Result<ReplOutput> {
+        self.catalog
+            .rename_table(table_name, new_table_name)
+            .map_err(|err| anyhow!(err))?;
+        Ok(ReplOutput::Message("OK".to_string()))
+    }
+
+    fn alter_table_rename_column(
+        &mut self,
+        table_name: &str,
+        old_column_name: &str,
+        new_column_name: &str,
+    ) -> Result<ReplOutput> {
+        self.catalog
+            .rename_column(table_name, old_column_name, new_column_name)
+            .map_err(|err| anyhow!(err))?;
+        Ok(ReplOutput::Message("OK".to_string()))
+    }
+
+    fn alter_table_add_column(
+        &mut self,
+        table_name: &str,
+        column_def: &ColumnDef,
+    ) -> Result<ReplOutput> {
+        self.catalog
+            .add_column(table_name, column_def.clone())
+            .map_err(|err| anyhow!(err))?;
+        Ok(ReplOutput::Message("OK".to_string()))
+    }
+
+    fn alter_table_drop_column(
+        &mut self,
+        table_name: &str,
+        column_name: &str,
+    ) -> Result<ReplOutput> {
+        self.catalog
+            .drop_column(table_name, column_name)
+            .map_err(|err| anyhow!(err))?;
+        Ok(ReplOutput::Message("OK".to_string()))
+    }
+
     fn insert_rows(
         &mut self,
         table_name: &str,
@@ -149,6 +251,9 @@ impl Engine {
                 values[*column_index] = value;
             }
             for (idx, field) in schema.fields.iter().enumerate() {
+                if !field.visible {
+                    continue;
+                }
                 if values[idx].is_null() && !field.nullable {
                     bail!("missing value for non-nullable column {}", field.name);
                 }
@@ -207,7 +312,13 @@ fn resolve_column_indices(schema: &Schema, columns: Option<&[String]>) -> Result
             }
         }
         None => {
-            indices.extend(0..schema.fields.len());
+            indices.extend(
+                schema
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, field)| field.visible.then_some(index)),
+            );
         }
     }
     Ok(indices)
@@ -228,24 +339,26 @@ pub fn schema_to_description(schema: &Schema) -> ReplOutput {
             table: None,
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "type".to_string(),
             table: None,
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "nullable".to_string(),
             table: None,
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
     ]);
 
     let rows = schema
-        .fields
-        .iter()
+        .visible_fields()
         .map(|field| {
             let values = vec![
                 Value::String(field.name.clone()),
@@ -268,6 +381,7 @@ pub fn tables_to_output(tables: &[String]) -> ReplOutput {
         table: None,
         data_type: DataType::Text,
         nullable: false,
+        visible: true,
     }]);
     let rows = tables
         .iter()
@@ -311,6 +425,7 @@ mod tests {
     impl Drop for TestDb {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_file(self.path.with_extension("wal"));
         }
     }
 
@@ -338,5 +453,78 @@ mod tests {
             ReplOutput::Rows { rows, .. } => assert_eq!(rows.len(), 1),
             _ => panic!("expected rows output"),
         }
+    }
+
+    #[test]
+    fn alter_table_sequence_updates_schema_and_rows() {
+        let db = TestDb::new("alter_sequence");
+        let mut engine = Engine::new(&db.path).expect("engine init");
+
+        engine
+            .execute_sql("CREATE TABLE people (id INT, tag TEXT);")
+            .expect("create table");
+        engine
+            .execute_sql("INSERT INTO people VALUES (1, 'alpha');")
+            .expect("insert row");
+        engine
+            .execute_sql("ALTER TABLE people RENAME TO users;")
+            .expect("rename table");
+        engine
+            .execute_sql("ALTER TABLE users RENAME COLUMN tag TO username;")
+            .expect("rename column");
+        engine
+            .execute_sql("ALTER TABLE users ADD COLUMN password TEXT;")
+            .expect("add column");
+        engine
+            .execute_sql("ALTER TABLE users DROP COLUMN id;")
+            .expect("drop column");
+
+        let output = engine
+            .execute_sql("SELECT username, password FROM users;")
+            .expect("select users");
+        match output {
+            ReplOutput::Rows { rows, .. } => {
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0].values()[0], Value::String("alpha".to_string()));
+                assert_eq!(rows[0].values()[1], Value::Null);
+            }
+            _ => panic!("expected rows output"),
+        }
+    }
+
+    #[test]
+    fn alter_table_rejects_invalid_operations() {
+        let db = TestDb::new("alter_invalid");
+        let mut engine = Engine::new(&db.path).expect("engine init");
+
+        engine
+            .execute_sql("CREATE TABLE people (id INT PRIMARY KEY, name TEXT);")
+            .expect("create table");
+
+        assert!(
+            engine
+                .execute_sql("ALTER TABLE missing RENAME TO users;")
+                .is_err()
+        );
+        assert!(
+            engine
+                .execute_sql("ALTER TABLE people RENAME COLUMN missing TO name2;")
+                .is_err()
+        );
+        assert!(
+            engine
+                .execute_sql("ALTER TABLE people ADD COLUMN name TEXT;")
+                .is_err()
+        );
+        assert!(
+            engine
+                .execute_sql("ALTER TABLE people DROP COLUMN id;")
+                .is_err()
+        );
+        assert!(
+            engine
+                .execute_sql("ALTER TABLE people ADD COLUMN age INT, DROP COLUMN name;")
+                .is_err()
+        );
     }
 }

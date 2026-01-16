@@ -4,6 +4,7 @@ pub mod index;
 pub mod logical_plan;
 pub mod parser;
 pub mod planner;
+pub mod recovery;
 pub mod schema;
 
 pub use execution::{Catalog, Executor, PhysicalPlanner, Rid, TableHeap, TableInfo, Tuple, Value};
@@ -14,6 +15,7 @@ pub use logical_plan::{
 };
 pub use parser::SqlParser;
 pub use planner::LogicalPlanner;
+pub use recovery::RecoveryManager;
 pub use schema::{ColumnDef, DataType, DefaultValue, Field, Schema, TableSchema};
 
 use anyhow::Result;

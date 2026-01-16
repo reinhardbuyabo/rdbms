@@ -12,7 +12,7 @@ pub fn temp_buffer_pool() -> BufferPoolManager {
     let dir = TempDir::new().expect("temp dir create failed");
     let path = dir.path().join("db");
     let disk_manager = DiskManager::open(path.to_str().expect("temp path utf8")).unwrap();
-    BufferPoolManager::new(disk_manager, 32)
+    BufferPoolManager::new(disk_manager, 256)
 }
 
 pub fn users_schema() -> Schema {
@@ -22,18 +22,21 @@ pub fn users_schema() -> Schema {
             table: Some("users".to_string()),
             data_type: DataType::Integer,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "name".to_string(),
             table: Some("users".to_string()),
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
         Field {
             name: "email".to_string(),
             table: Some("users".to_string()),
             data_type: DataType::Text,
             nullable: false,
+            visible: true,
         },
     ])
 }

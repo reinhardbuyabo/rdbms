@@ -60,6 +60,32 @@ fn format_value(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Boolean(flag) => flag.to_string(),
         Value::Timestamp(number) => number.to_string(),
+        Value::Blob(bytes) => format_blob_preview(bytes),
+    }
+}
+
+fn format_blob_preview(bytes: &[u8]) -> String {
+    let preview_len = bytes.len().min(16);
+    let preview = bytes[..preview_len]
+        .iter()
+        .map(|byte| format!("{:02X}", byte))
+        .collect::<String>();
+    let suffix = if bytes.len() > preview_len { "…" } else { "" };
+    let size_label = format_blob_size(bytes.len());
+    if preview.is_empty() {
+        format!("<BLOB size={}>", size_label)
+    } else {
+        format!("<BLOB 0x{}{} size={}>", preview, suffix, size_label)
+    }
+}
+
+fn format_blob_size(len: usize) -> String {
+    if len >= 1024 * 1024 {
+        format!("{}MB", len.div_ceil(1024 * 1024))
+    } else if len >= 1024 {
+        format!("{}KB", len.div_ceil(1024))
+    } else {
+        format!("{}B", len)
     }
 }
 
@@ -74,6 +100,7 @@ mod tests {
             table: None,
             data_type: DataType::Text,
             nullable: true,
+            visible: true,
         }])
     }
 
@@ -89,12 +116,14 @@ mod tests {
                 table: Some("users".to_string()),
                 data_type: DataType::Integer,
                 nullable: false,
+                visible: true,
             },
             Field {
                 name: "name".to_string(),
                 table: Some("users".to_string()),
                 data_type: DataType::Text,
                 nullable: false,
+                visible: true,
             },
         ]);
         let rows = vec![Tuple::new(vec![
@@ -123,6 +152,23 @@ mod tests {
         let output = format_output(&ReplOutput::Rows { schema, rows });
         assert!(output.contains("NULL"));
         assert!(output.contains("(1 rows)"));
+    }
+
+    #[test]
+    fn formats_blob_values() {
+        let schema = Schema::new(vec![Field {
+            name: "payload".to_string(),
+            table: None,
+            data_type: DataType::Blob,
+            nullable: false,
+            visible: true,
+        }]);
+        let blob = Value::Blob(vec![0x89, 0x50, 0x4E, 0x47]);
+        let rows = vec![Tuple::new(vec![blob])];
+        let output = format_output(&ReplOutput::Rows { schema, rows });
+        assert!(output.contains("<BLOB"));
+        assert!(output.contains("size=4B"));
+        assert!(!output.contains("PNG"));
     }
 
     #[test]
@@ -157,6 +203,7 @@ mod tests {
             table: None,
             data_type: DataType::Integer,
             nullable: false,
+            visible: true,
         }]);
         let rows = (0..100_000)
             .map(|idx| Tuple::new(vec![Value::Integer(idx as i64)]))
