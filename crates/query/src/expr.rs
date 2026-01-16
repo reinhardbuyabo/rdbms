@@ -53,6 +53,7 @@ pub enum LiteralValue {
     Float(f64),
     String(String),
     Boolean(bool),
+    Blob(Vec<u8>),
 }
 
 impl fmt::Display for LiteralValue {
@@ -63,6 +64,15 @@ impl fmt::Display for LiteralValue {
             LiteralValue::Float(n) => write!(f, "{}", n),
             LiteralValue::String(s) => write!(f, "'{}'", s),
             LiteralValue::Boolean(b) => write!(f, "{}", b),
+            LiteralValue::Blob(bytes) => {
+                let preview = bytes
+                    .iter()
+                    .take(16)
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<String>();
+                let suffix = if bytes.len() > 16 { "…" } else { "" };
+                write!(f, "BLOB(0x{}{})", preview, suffix)
+            }
         }
     }
 }

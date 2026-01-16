@@ -9,6 +9,8 @@ pub struct Page {
     pub(crate) pin_count: u32,
 }
 
+pub const PAGE_LSN_SIZE: usize = 8;
+
 impl Page {
     /// Creates a zeroed page with no identity.
     pub fn new() -> Self {
@@ -23,6 +25,18 @@ impl Page {
     /// Returns the page identifier, if assigned.
     pub fn page_id(&self) -> Option<PageId> {
         self.page_id
+    }
+
+    /// Returns the page LSN stored in the header.
+    pub fn lsn(&self) -> u64 {
+        let mut bytes = [0u8; PAGE_LSN_SIZE];
+        bytes.copy_from_slice(&self.data[..PAGE_LSN_SIZE]);
+        u64::from_le_bytes(bytes)
+    }
+
+    /// Updates the page LSN in the header.
+    pub fn set_lsn(&mut self, lsn: u64) {
+        self.data[..PAGE_LSN_SIZE].copy_from_slice(&lsn.to_le_bytes());
     }
 
     /// Returns whether the page has been modified.

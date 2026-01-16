@@ -372,6 +372,13 @@ impl LogicalPlanner {
             }
             Value::Boolean(b) => Ok(LiteralValue::Boolean(b)),
             Value::Null => Ok(LiteralValue::Null),
+            Value::HexStringLiteral(hex) => Ok(LiteralValue::Blob(self.parse_hex_literal(&hex)?)),
+            Value::SingleQuotedByteStringLiteral(bytes)
+            | Value::DoubleQuotedByteStringLiteral(bytes)
+            | Value::TripleSingleQuotedByteStringLiteral(bytes)
+            | Value::TripleDoubleQuotedByteStringLiteral(bytes) => {
+                Ok(LiteralValue::Blob(bytes.into_bytes()))
+            }
             _ => bail!("Unsupported literal value: {:?}", value),
         }
     }
@@ -405,6 +412,21 @@ impl LogicalPlanner {
         })
     }
 
+    fn parse_hex_literal(&self, value: &str) -> Result<Vec<u8>> {
+        let normalized = value.trim();
+        if !normalized.len().is_multiple_of(2) {
+            bail!("Invalid hex literal length");
+        }
+        let mut bytes = Vec::with_capacity(normalized.len() / 2);
+        let mut chars = normalized.chars();
+        while let (Some(high), Some(low)) = (chars.next(), chars.next()) {
+            let hex = [high, low].iter().collect::<String>();
+            let byte = u8::from_str_radix(&hex, 16).context("Invalid hex literal")?;
+            bytes.push(byte);
+        }
+        Ok(bytes)
+    }
+
     fn convert_data_type(&self, dt: &SqlDataType) -> Result<LocalDataType> {
         Ok(match dt {
             SqlDataType::Int(_) | SqlDataType::Integer(_) => LocalDataType::Integer,
@@ -415,6 +437,9 @@ impl LogicalPlanner {
             }
             SqlDataType::Boolean => LocalDataType::Boolean,
             SqlDataType::Timestamp(_, _) => LocalDataType::Timestamp,
+            SqlDataType::Blob(_) | SqlDataType::Bytes(_) | SqlDataType::Bytea => {
+                LocalDataType::Blob
+            }
             _ => bail!("Unsupported data type: {:?}", dt),
         })
     }
@@ -521,9 +546,20 @@ impl LogicalPlanner {
                             }
                         }
                         ColumnOption::Default(expr) => {
+                            if data_type == LocalDataType::Blob {
+                                bail!("BLOB columns cannot have DEFAULT values");
+                            }
                             default_value = Some(self.plan_expr_to_default(expr)?);
                         }
                         _ => {}
+                    }
+                }
+                if data_type == LocalDataType::Blob {
+                    if primary_key || unique {
+                        bail!("BLOB columns cannot be PRIMARY KEY or UNIQUE");
+                    }
+                    if default_value.is_some() {
+                        bail!("BLOB columns cannot have DEFAULT values");
                     }
                 }
                 Ok(ColumnDef {
@@ -536,9 +572,10 @@ impl LogicalPlanner {
                 })
             })
             .collect();
+        let column_defs = column_defs?;
         Ok(LogicalPlan::CreateTable {
             table_name,
-            columns: column_defs?,
+            columns: column_defs,
             if_not_exists: ct.if_not_exists,
         })
     }

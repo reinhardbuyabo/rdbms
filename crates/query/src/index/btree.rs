@@ -2,30 +2,30 @@ use crate::execution::operator::{ExecutionError, ExecutionResult};
 use crate::execution::seq_scan::Rid;
 use crate::execution::tuple::Value;
 use std::cmp::Ordering;
-use storage::{BufferPoolManager, Page, PageId, PAGE_SIZE};
+use storage::{BufferPoolManager, Page, PageId, PAGE_LSN_SIZE, PAGE_SIZE};
 
 const INVALID_PAGE_ID: PageId = 0;
 const PAGE_TYPE_HEADER: u8 = 1;
 const PAGE_TYPE_INTERNAL: u8 = 2;
 const PAGE_TYPE_LEAF: u8 = 3;
 
-const PAGE_TYPE_OFFSET: usize = 0;
-const KEY_COUNT_OFFSET: usize = 1;
-const PARENT_OFFSET: usize = 8;
-const SPECIAL_OFFSET: usize = 16;
+const PAGE_TYPE_OFFSET: usize = PAGE_LSN_SIZE;
+const KEY_COUNT_OFFSET: usize = PAGE_LSN_SIZE + 1;
+const PARENT_OFFSET: usize = PAGE_LSN_SIZE + 8;
+const SPECIAL_OFFSET: usize = PAGE_LSN_SIZE + 16;
 
-const LEAF_HEADER_SIZE: usize = 24;
-const INTERNAL_HEADER_SIZE: usize = 24;
+const LEAF_HEADER_SIZE: usize = PAGE_LSN_SIZE + 24;
+const INTERNAL_HEADER_SIZE: usize = PAGE_LSN_SIZE + 24;
 const RID_SIZE: usize = 12;
 const DEFAULT_TEXT_KEY_SIZE: usize = 128;
 
-const HEADER_ROOT_OFFSET: usize = 8;
-const HEADER_KEY_TYPE_OFFSET: usize = 16;
-const HEADER_KEY_SIZE_OFFSET: usize = 17;
-const HEADER_UNIQUE_OFFSET: usize = 19;
-const HEADER_COMPOSITE_COUNT_OFFSET: usize = 20;
-const HEADER_TEXT_KEY_SIZE_OFFSET: usize = 21;
-const HEADER_COMPOSITE_TYPES_OFFSET: usize = 23;
+const HEADER_ROOT_OFFSET: usize = PAGE_LSN_SIZE + 8;
+const HEADER_KEY_TYPE_OFFSET: usize = PAGE_LSN_SIZE + 16;
+const HEADER_KEY_SIZE_OFFSET: usize = PAGE_LSN_SIZE + 17;
+const HEADER_UNIQUE_OFFSET: usize = PAGE_LSN_SIZE + 19;
+const HEADER_COMPOSITE_COUNT_OFFSET: usize = PAGE_LSN_SIZE + 20;
+const HEADER_TEXT_KEY_SIZE_OFFSET: usize = PAGE_LSN_SIZE + 21;
+const HEADER_COMPOSITE_TYPES_OFFSET: usize = PAGE_LSN_SIZE + 23;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexKeyType {
@@ -1019,6 +1019,7 @@ fn init_header_page(
             "too many composite key columns".to_string(),
         ));
     }
+    page.set_lsn(0);
     write_u8(page, PAGE_TYPE_OFFSET, PageType::Header.as_byte())?;
     write_u64(page, HEADER_ROOT_OFFSET, root_page_id)?;
     write_u8(page, HEADER_KEY_TYPE_OFFSET, key_type.to_byte())?;
@@ -1038,6 +1039,7 @@ fn init_leaf_page(
     parent: Option<PageId>,
     next: Option<PageId>,
 ) -> ExecutionResult<()> {
+    page.set_lsn(0);
     write_u8(page, PAGE_TYPE_OFFSET, PageType::Leaf.as_byte())?;
     write_u16(page, KEY_COUNT_OFFSET, 0)?;
     write_parent_page_id(page, parent)?;
@@ -1239,13 +1241,31 @@ fn read_bytes(page: &Page, offset: usize, len: usize) -> ExecutionResult<&[u8]> 
 }
 
 fn write_bytes(page: &mut Page, offset: usize, bytes: &[u8]) -> ExecutionResult<()> {
-    if page.write_bytes(offset, bytes) {
-        Ok(())
-    } else {
-        Err(ExecutionError::Execution(
+    if offset + bytes.len() > PAGE_SIZE {
+        return Err(ExecutionError::Execution(
             "page write out of bounds".to_string(),
-        ))
+        ));
     }
+    let before = page
+        .read_bytes(offset, bytes.len())
+        .ok_or_else(|| ExecutionError::Execution("page read out of bounds".to_string()))?
+        .to_vec();
+    let page_id = page
+        .page_id()
+        .ok_or_else(|| ExecutionError::Execution("page id missing".to_string()))?;
+    let lsn = wal::log_page_update(page_id, offset as u32, before, bytes.to_vec())
+        .map_err(|err| ExecutionError::Execution(format!("wal error: {}", err)))?;
+    if !page.write_bytes(offset, bytes) {
+        return Err(ExecutionError::Execution(
+            "page write out of bounds".to_string(),
+        ));
+    }
+    if let Some(lsn) = lsn {
+        if lsn > page.lsn() {
+            page.set_lsn(lsn);
+        }
+    }
+    Ok(())
 }
 
 fn pick_child_index(keys: &[IndexKey], key: &IndexKey, use_upper: bool) -> usize {

@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::page::Page;
 use crate::replacer::{FrameId, LRUReplacer, Replacer};
 use crate::{DiskManager, PageId};
+use wal::LogManager;
 
 /// Errors returned by the buffer pool manager.
 #[derive(Debug, Error)]
@@ -18,6 +19,9 @@ pub enum BufferPoolError {
     /// The underlying disk manager failed.
     #[error("disk manager error: {0}")]
     Io(#[from] std::io::Error),
+    /// WAL flush failed.
+    #[error("wal error: {0}")]
+    Wal(#[from] wal::WalError),
 }
 
 /// Convenience alias for buffer pool results.
@@ -56,6 +60,7 @@ struct BufferPoolState {
     pages: Vec<Page>,
     page_table: HashMap<PageId, FrameId>,
     free_list: Vec<FrameId>,
+    log_manager: Option<Arc<LogManager>>,
 }
 
 #[derive(Default)]
@@ -70,9 +75,26 @@ pub struct BufferPoolManager {
     metrics: Arc<BufferPoolMetrics>,
 }
 
+/// Flush mode for buffer pool writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlushMode {
+    /// Defer disk sync to later (default behavior).
+    Lazy,
+    /// Force the disk write to be synced.
+    Force,
+}
+
 impl BufferPoolManager {
     /// Creates a new buffer pool manager with a fixed number of frames.
     pub fn new(disk_manager: DiskManager, pool_size: usize) -> Self {
+        Self::new_with_log(disk_manager, pool_size, None)
+    }
+
+    pub fn new_with_log(
+        disk_manager: DiskManager,
+        pool_size: usize,
+        log_manager: Option<Arc<LogManager>>,
+    ) -> Self {
         let pages = vec![Page::new(); pool_size];
         let free_list = (0..pool_size).rev().collect();
         let state = BufferPoolState {
@@ -81,6 +103,7 @@ impl BufferPoolManager {
             pages,
             page_table: HashMap::new(),
             free_list,
+            log_manager,
         };
         Self {
             inner: Arc::new(Mutex::new(state)),
@@ -110,10 +133,30 @@ impl BufferPoolManager {
         );
         if let Some(old_page_id) = pages[frame_id].page_id {
             if pages[frame_id].is_dirty {
+                if let Some(log_manager) = &state.log_manager {
+                    log_manager.flush(pages[frame_id].lsn())?;
+                }
                 let data = pages[frame_id].data();
                 disk_manager.write_page(old_page_id, data)?;
             }
             page_table.remove(&old_page_id);
+        }
+        Ok(())
+    }
+
+    fn flush_page_data(
+        state: &mut BufferPoolState,
+        page_id: PageId,
+        data: &[u8; crate::PAGE_SIZE],
+        lsn: u64,
+        force_disk: bool,
+    ) -> BufferPoolResult<()> {
+        if let Some(log_manager) = &state.log_manager {
+            log_manager.flush(lsn)?;
+        }
+        state.disk_manager.write_page(page_id, data)?;
+        if force_disk {
+            state.disk_manager.sync_data()?;
         }
         Ok(())
     }
@@ -200,29 +243,55 @@ impl BufferPoolManager {
 
     /// Flushes a page to disk, if present.
     pub fn flush_page(&self, page_id: PageId) -> BufferPoolResult<bool> {
+        self.flush_page_with_mode(page_id, FlushMode::Lazy)
+    }
+
+    pub fn flush_page_with_mode(&self, page_id: PageId, mode: FlushMode) -> BufferPoolResult<bool> {
         let mut state = self.lock_state()?;
         let frame_id = match state.page_table.get(&page_id) {
             Some(&frame_id) => frame_id,
             None => return Ok(false),
         };
-        let state = &mut *state;
-        let (disk_manager, pages) = (&mut state.disk_manager, &mut state.pages);
-        let page = &mut pages[frame_id];
-        disk_manager.write_page(page_id, page.data())?;
-        page.is_dirty = false;
+        let (data, lsn) = {
+            let page = &mut state.pages[frame_id];
+            let data = *page.data();
+            let lsn = page.lsn();
+            page.is_dirty = false;
+            (data, lsn)
+        };
+        Self::flush_page_data(&mut state, page_id, &data, lsn, mode == FlushMode::Force)?;
         Ok(true)
     }
 
     /// Flushes all dirty pages to disk.
     pub fn flush_all_pages(&self) -> BufferPoolResult<()> {
+        self.flush_all_pages_with_mode(FlushMode::Lazy)
+    }
+
+    pub fn flush_all_pages_with_mode(&self, mode: FlushMode) -> BufferPoolResult<()> {
         let mut state = self.lock_state()?;
-        let state = &mut *state;
-        let (disk_manager, pages) = (&mut state.disk_manager, &mut state.pages);
-        for page in pages.iter_mut() {
-            if let Some(page_id) = page.page_id {
-                disk_manager.write_page(page_id, page.data())?;
+        let page_ids = state
+            .pages
+            .iter()
+            .filter_map(|page| page.page_id)
+            .collect::<Vec<_>>();
+        for page_id in page_ids {
+            let frame_id = match state.page_table.get(&page_id) {
+                Some(&frame_id) => frame_id,
+                None => continue,
+            };
+            let (data, lsn, is_dirty) = {
+                let page = &mut state.pages[frame_id];
+                let data = *page.data();
+                let lsn = page.lsn();
+                let is_dirty = page.is_dirty;
                 page.is_dirty = false;
+                (data, lsn, is_dirty)
+            };
+            if !is_dirty {
+                continue;
             }
+            Self::flush_page_data(&mut state, page_id, &data, lsn, mode == FlushMode::Force)?;
         }
         Ok(())
     }
@@ -231,7 +300,7 @@ impl BufferPoolManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PAGE_SIZE;
+    use crate::{PAGE_LSN_SIZE, PAGE_SIZE};
     use std::fs;
     use std::path::PathBuf;
 
@@ -307,7 +376,7 @@ mod tests {
 
         {
             let mut guard = bpm.fetch_page(page_id).unwrap().unwrap();
-            guard.write_bytes(0, b"hi");
+            guard.write_bytes(PAGE_LSN_SIZE, b"hi");
         }
         assert!(bpm.unpin_page(page_id, true).unwrap());
 
@@ -321,7 +390,7 @@ mod tests {
         assert!(bpm.unpin_page(second_id, false).unwrap());
 
         let guard = bpm.fetch_page(page_id).unwrap().unwrap();
-        assert_eq!(guard.read_bytes(0, 2).unwrap(), b"hi");
+        assert_eq!(guard.read_bytes(PAGE_LSN_SIZE, 2).unwrap(), b"hi");
         drop(guard);
         assert!(bpm.unpin_page(page_id, false).unwrap());
     }

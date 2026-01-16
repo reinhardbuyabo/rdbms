@@ -7,6 +7,7 @@ pub enum DataType {
     Text,
     Boolean,
     Timestamp,
+    Blob,
 }
 
 impl DataType {
@@ -17,7 +18,7 @@ impl DataType {
             DataType::Real => Some(8),
             DataType::Boolean => Some(1),
             DataType::Timestamp => Some(8),
-            DataType::Text => None,
+            DataType::Text | DataType::Blob => None,
         }
     }
     pub fn is_nullable_by_default(&self) -> bool {

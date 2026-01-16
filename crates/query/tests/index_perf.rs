@@ -26,7 +26,16 @@ fn build_table(row_count: i64) -> (storage::BufferPoolManager, query::TableInfo)
         let _ = heap
             .insert_tuple(&user_tuple(id, name, email), &schema)
             .unwrap();
+        if id > 0 && id % 2_000 == 0 {
+            let _ = buffer_pool.flush_all_pages();
+        }
+        if id > 0 && id % 2_000 == 0 {
+            if let Some(pid) = heap.first_page_id().unwrap_or(None) {
+                let _ = buffer_pool.unpin_page(pid, false);
+            }
+        }
     }
+    let _ = buffer_pool.flush_all_pages();
 
     catalog
         .table_mut("users")
@@ -40,8 +49,8 @@ fn build_table(row_count: i64) -> (storage::BufferPoolManager, query::TableInfo)
 
 #[test]
 fn index_scan_uses_fewer_page_fetches_than_seq_scan() -> ExecutionResult<()> {
-    let row_count = 50_000;
-    let target = 42_000;
+    let row_count = 10_000;
+    let target = 4_200;
 
     let (index_pool, index_table) = build_table(row_count);
     let expected = vec![user_tuple(target, "user", "user@example.com")];

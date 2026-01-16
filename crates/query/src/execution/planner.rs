@@ -362,10 +362,12 @@ impl<'a> PhysicalPlanner<'a> {
                     if let Some(planned) =
                         self.plan_index_scan(table_name, alias.as_deref(), predicate)?
                     {
+                        reject_blob_predicate(predicate, &planned.schema)?;
                         return Ok(planned);
                     }
                 }
                 let input_planned = self.plan_node(input)?;
+                reject_blob_predicate(predicate, &input_planned.schema)?;
                 let schema = input_planned.schema.clone();
                 let operator = Box::new(Filter::new(
                     input_planned.operator,
@@ -412,6 +414,7 @@ impl<'a> PhysicalPlanner<'a> {
                 let mut fields = left_planned.schema.fields.clone();
                 fields.extend(right_planned.schema.fields.clone());
                 let output_schema = Schema::new(fields);
+                reject_blob_predicate(&predicate, &output_schema)?;
                 let operator = Box::new(NestedLoopJoin::new(
                     left_planned.operator,
                     right_planned.operator,
@@ -539,6 +542,17 @@ fn build_projection_schema(
                     )));
                 }
             }
+            Expr::Literal(crate::expr::LiteralValue::Blob(_)) => {
+                let name = aliases
+                    .and_then(|aliases| aliases.get(index).cloned())
+                    .unwrap_or_else(|| expr.to_string());
+                fields.push(Field {
+                    name,
+                    table: None,
+                    data_type: DataType::Blob,
+                    nullable: true,
+                });
+            }
             _ => {
                 let name = aliases
                     .and_then(|aliases| aliases.get(index).cloned())
@@ -559,6 +573,9 @@ fn index_key_type_for_data_type(data_type: &DataType) -> ExecutionResult<IndexKe
     match data_type {
         DataType::Integer | DataType::BigInt | DataType::Timestamp => Ok(IndexKeyType::Integer),
         DataType::Text => Ok(IndexKeyType::Text),
+        DataType::Blob => Err(ExecutionError::Execution(
+            "BLOB columns cannot be indexed".to_string(),
+        )),
         other => Err(ExecutionError::Execution(format!(
             "unsupported index key type {:?}",
             other
@@ -688,6 +705,76 @@ fn column_matches(column_table: Option<&str>, table_name: &str, alias: Option<&s
                     .unwrap_or(false)
         }
     }
+}
+
+fn reject_blob_predicate(expr: &Expr, schema: &Schema) -> ExecutionResult<()> {
+    if expr_uses_blob(expr, schema)? {
+        return Err(ExecutionError::UnsupportedExpression(
+            "BLOB columns do not support predicate expressions".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn expr_uses_blob(expr: &Expr, schema: &Schema) -> ExecutionResult<bool> {
+    match expr {
+        Expr::Column { table, name } => Ok(field_is_blob(schema, table.as_deref(), name)),
+        Expr::Literal(literal) => Ok(matches!(literal, crate::expr::LiteralValue::Blob(_))),
+        Expr::BinaryOp { left, right, .. } => {
+            Ok(expr_uses_blob(left, schema)? || expr_uses_blob(right, schema)?)
+        }
+        Expr::UnaryOp { expr, .. } => expr_uses_blob(expr, schema),
+        Expr::Function { args, .. } => {
+            for arg in args {
+                if expr_uses_blob(arg, schema)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Expr::Cast { expr, .. } => expr_uses_blob(expr, schema),
+        Expr::IsNull { expr, .. } => expr_uses_blob(expr, schema),
+        Expr::Between {
+            expr, low, high, ..
+        } => Ok(expr_uses_blob(expr, schema)?
+            || expr_uses_blob(low, schema)?
+            || expr_uses_blob(high, schema)?),
+        Expr::In { expr, list, .. } => {
+            if expr_uses_blob(expr, schema)? {
+                return Ok(true);
+            }
+            for item in list {
+                if expr_uses_blob(item, schema)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        Expr::Wildcard | Expr::QualifiedWildcard { .. } => Ok(false),
+    }
+}
+
+fn field_is_blob(schema: &Schema, table: Option<&str>, name: &str) -> bool {
+    let qualified = table.map(|table| format!("{}.{}", table, name));
+    schema.fields.iter().any(|field| {
+        let name_matches = field.name.eq_ignore_ascii_case(name)
+            || qualified
+                .as_ref()
+                .map(|qualified| field.name.eq_ignore_ascii_case(qualified))
+                .unwrap_or(false)
+            || field
+                .name
+                .split('.')
+                .next_back()
+                .map(|segment| segment.eq_ignore_ascii_case(name))
+                .unwrap_or(false);
+        let table_matches = match (table, field.table.as_deref()) {
+            (Some(table_name), Some(field_table)) => field_table.eq_ignore_ascii_case(table_name),
+            (None, _) => true,
+            _ => false,
+        };
+        name_matches && table_matches && field.data_type == DataType::Blob
+    })
 }
 
 fn flip_comparison_operator(op: BinaryOperator) -> Option<BinaryOperator> {

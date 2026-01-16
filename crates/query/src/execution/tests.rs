@@ -9,7 +9,7 @@ use crate::schema::{DataType, Field, Schema};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use storage::{BufferPoolManager, DiskManager};
+use storage::{BufferPoolManager, DiskManager, PAGE_SIZE};
 
 static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -796,15 +796,23 @@ fn index_scan_projection_and_join() -> ExecutionResult<()> {
 }
 
 #[test]
-fn index_scan_touches_fewer_pages_than_seq_scan() -> ExecutionResult<()> {
-    let (_ctx, bpm) = setup_bpm("index_perf", 16);
-    let schema = schema_for("numbers", vec![("id", DataType::Integer)]);
-    let heap = TableHeap::create(bpm.clone())?;
-    for value in 0..10_000 {
-        let tuple = Tuple::new(vec![Value::Integer(value)]);
-        let _ = heap.insert_tuple(&tuple, &schema)?;
-    }
+fn blob_comparison_errors() {
+    let expr = Expr::BinaryOp {
+        left: Box::new(Expr::Literal(LiteralValue::Blob(vec![1, 2]))),
+        op: BinaryOperator::Eq,
+        right: Box::new(Expr::Literal(LiteralValue::Blob(vec![1, 2]))),
+    };
+    let result =
+        crate::execution::operator::evaluate_expr(&expr, &Tuple::new(Vec::new()), &Schema::empty());
+    assert!(matches!(result, Err(ExecutionError::Expression(message)) if message.contains("BLOB")));
+}
 
+#[test]
+fn index_scan_reduces_page_fetches() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("index_scan_fetches", 256);
+    let rows: Vec<Vec<Value>> = (0..20_000).map(|i| vec![Value::Integer(i)]).collect();
+    let (schema, heap, _rows) =
+        build_table(&bpm, "numbers", vec![("id", DataType::Integer)], rows)?;
     let mut indexed_table = TableInfo::new("numbers", schema.clone(), heap.clone());
     indexed_table.create_index("numbers_idx", "id", true, false)?;
 
@@ -830,5 +838,41 @@ fn index_scan_touches_fewer_pages_than_seq_scan() -> ExecutionResult<()> {
 
     assert_eq!(indexed_results, seq_results);
     assert!(indexed_fetches * 5 < seq_fetches);
+    Ok(())
+}
+
+#[test]
+fn blob_round_trip_inline() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("blob_inline", 8);
+    let schema = schema_for(
+        "files",
+        vec![("id", DataType::Integer), ("payload", DataType::Blob)],
+    );
+    let heap = TableHeap::create(bpm.clone())?;
+    let blob = vec![1u8, 2, 3, 4];
+    let tuple = Tuple::new(vec![Value::Integer(1), Value::Blob(blob.clone())]);
+    let rid = heap.insert_tuple(&tuple, &schema)?;
+    let loaded = heap
+        .get_tuple(rid, &schema)?
+        .ok_or_else(|| ExecutionError::Execution("missing tuple".to_string()))?;
+    assert_eq!(loaded.values()[1], Value::Blob(blob));
+    Ok(())
+}
+
+#[test]
+fn blob_round_trip_overflow() -> ExecutionResult<()> {
+    let (_ctx, bpm) = setup_bpm("blob_overflow", 16);
+    let schema = schema_for(
+        "files",
+        vec![("id", DataType::Integer), ("payload", DataType::Blob)],
+    );
+    let heap = TableHeap::create(bpm.clone())?;
+    let blob = vec![0xAB; PAGE_SIZE * 2];
+    let tuple = Tuple::new(vec![Value::Integer(1), Value::Blob(blob.clone())]);
+    let rid = heap.insert_tuple(&tuple, &schema)?;
+    let loaded = heap
+        .get_tuple(rid, &schema)?
+        .ok_or_else(|| ExecutionError::Execution("missing tuple".to_string()))?;
+    assert_eq!(loaded.values()[1], Value::Blob(blob));
     Ok(())
 }

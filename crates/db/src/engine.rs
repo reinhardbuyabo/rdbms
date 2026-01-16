@@ -1,13 +1,15 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use query::execution::operator::evaluate_expr;
 use query::{
-    Catalog, ColumnDef, DataType, Executor, Expr, Field, LogicalPlan, PhysicalPlanner, Schema,
-    TableHeap, TableInfo, Tuple, Value, sql_to_logical_plan,
+    Catalog, ColumnDef, DataType, Executor, Expr, Field, LogicalPlan, PhysicalPlanner,
+    RecoveryManager, Schema, TableHeap, TableInfo, Tuple, Value, sql_to_logical_plan,
 };
 use storage::{BufferPoolManager, DiskManager};
+use wal::{LogManager, TransactionManager};
 
 use crate::printer::ReplOutput;
 
@@ -16,6 +18,12 @@ const DEFAULT_POOL_SIZE: usize = 64;
 pub struct Engine {
     catalog: Catalog,
     buffer_pool: BufferPoolManager,
+    #[allow(dead_code)]
+    log_manager: Arc<LogManager>,
+    txn_manager: TransactionManager,
+    recovery: RecoveryManager,
+    #[allow(dead_code)]
+    wal_path: PathBuf,
 }
 
 impl Engine {
@@ -25,15 +33,54 @@ impl Engine {
 
     pub fn new_with_pool(db_path: &Path, pool_size: usize) -> Result<Self> {
         let disk_manager = DiskManager::open(db_path).context("open database file")?;
-        let buffer_pool = BufferPoolManager::new(disk_manager, pool_size);
-        Ok(Self {
+        let wal_path = db_path.with_extension("wal");
+        let log_manager = Arc::new(LogManager::open(&wal_path).context("open wal file")?);
+        let buffer_pool = BufferPoolManager::new_with_log(
+            disk_manager,
+            pool_size,
+            Some(Arc::clone(&log_manager)),
+        );
+        let txn_manager = TransactionManager::new(Arc::clone(&log_manager));
+        let recovery = RecoveryManager::new(Arc::clone(&log_manager), &wal_path);
+        let engine = Self {
             catalog: Catalog::new(),
             buffer_pool,
-        })
+            log_manager,
+            txn_manager,
+            recovery,
+            wal_path,
+        };
+        engine.recovery.recover(&engine.buffer_pool)?;
+        Ok(engine)
     }
 
     pub fn execute_sql(&mut self, sql: &str) -> Result<ReplOutput> {
         let plan = sql_to_logical_plan(sql)?;
+        let txn = self.txn_manager.begin().context("begin transaction")?;
+        let txn_manager = self.txn_manager.clone();
+        let result = txn_manager.with_transaction(&txn, || self.execute_plan(plan));
+        match result {
+            Ok(output) => {
+                self.txn_manager
+                    .commit(&txn)
+                    .context("commit transaction")?;
+                Ok(output)
+            }
+            Err(error) => {
+                self.txn_manager.abort(&txn).context("abort transaction")?;
+                self.recovery
+                    .rollback_transaction(&self.buffer_pool, &txn)
+                    .context("rollback transaction")?;
+                Err(error)
+            }
+        }
+    }
+
+    pub fn list_tables(&self) -> Vec<String> {
+        self.catalog.table_names()
+    }
+
+    fn execute_plan(&mut self, plan: LogicalPlan) -> Result<ReplOutput> {
         match plan {
             LogicalPlan::CreateTable {
                 table_name,
@@ -56,10 +103,6 @@ impl Engine {
             LogicalPlan::Update { .. } => self.execute_update(plan),
             _ => self.execute_query(plan),
         }
-    }
-
-    pub fn list_tables(&self) -> Vec<String> {
-        self.catalog.table_names()
     }
 
     pub fn table_schema(&self, table_name: &str) -> Option<Schema> {
@@ -311,6 +354,7 @@ mod tests {
     impl Drop for TestDb {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_file(self.path.with_extension("wal"));
         }
     }
 

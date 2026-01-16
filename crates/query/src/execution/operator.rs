@@ -399,6 +399,9 @@ fn compare_values(left: &Value, right: &Value) -> ExecutionResult<Option<Orderin
         return Ok(None);
     }
     match (left, right) {
+        (Value::Blob(_), _) | (_, Value::Blob(_)) => Err(ExecutionError::Expression(
+            "BLOB columns do not support comparison operators".to_string(),
+        )),
         (Value::String(left_value), Value::String(right_value)) => {
             Ok(Some(left_value.cmp(right_value)))
         }
@@ -422,6 +425,9 @@ fn boolean_from_value(value: &Value) -> ExecutionResult<Option<bool>> {
     match value {
         Value::Boolean(flag) => Ok(Some(*flag)),
         Value::Null => Ok(None),
+        Value::Blob(_) => Err(ExecutionError::Expression(
+            "BLOB columns do not support boolean operators".to_string(),
+        )),
         other => Err(ExecutionError::Expression(format!(
             "expected boolean value, found {:?}",
             other
@@ -441,6 +447,9 @@ fn numeric_from_value(value: &Value) -> ExecutionResult<Option<NumericValue>> {
         Value::Integer(number) => Ok(Some(NumericValue::Integer(*number))),
         Value::Timestamp(number) => Ok(Some(NumericValue::Integer(*number))),
         Value::Float(number) => Ok(Some(NumericValue::Float(*number))),
+        Value::Blob(_) => Err(ExecutionError::Expression(
+            "BLOB columns do not support numeric operators".to_string(),
+        )),
         other => Err(ExecutionError::Expression(format!(
             "expected numeric value, found {:?}",
             other
@@ -471,6 +480,16 @@ fn numeric_pair(left: &Value, right: &Value) -> ExecutionResult<Option<(f64, f64
 fn apply_cast(value: Value, target_type: &DataType) -> ExecutionResult<Value> {
     if value.is_null() {
         return Ok(Value::Null);
+    }
+    if matches!(target_type, DataType::Blob) {
+        return Err(ExecutionError::Expression(
+            "BLOB columns do not support CAST".to_string(),
+        ));
+    }
+    if matches!(value, Value::Blob(_)) {
+        return Err(ExecutionError::Expression(
+            "BLOB columns do not support CAST".to_string(),
+        ));
     }
     match target_type {
         DataType::Integer | DataType::BigInt => match value {
@@ -534,6 +553,9 @@ fn apply_cast(value: Value, target_type: &DataType) -> ExecutionResult<Value> {
                 other
             ))),
         },
+        DataType::Blob => Err(ExecutionError::Expression(
+            "BLOB columns do not support CAST".to_string(),
+        )),
     }
 }
 
@@ -545,5 +567,8 @@ fn value_to_string(value: &Value) -> ExecutionResult<String> {
         Value::Float(number) => Ok(number.to_string()),
         Value::Boolean(flag) => Ok(flag.to_string()),
         Value::Null => Ok("NULL".to_string()),
+        Value::Blob(_) => Err(ExecutionError::Expression(
+            "BLOB columns do not support string operations".to_string(),
+        )),
     }
 }

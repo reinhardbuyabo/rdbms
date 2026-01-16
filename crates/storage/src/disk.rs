@@ -97,6 +97,11 @@ impl DiskManager {
         Ok(())
     }
 
+    /// Forces buffered data to disk.
+    pub fn sync_data(&self) -> Result<()> {
+        self.file.sync_data()
+    }
+
     /// Allocates a new page: extends file, writes zero page, updates + persists header
     pub fn allocate_page(&mut self) -> Result<PageId> {
         let page_id = self.header.next_page_id;
