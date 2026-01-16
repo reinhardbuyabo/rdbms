@@ -11,3 +11,4 @@ query = { path = "../query" }
 rustyline = "13"
 storage = { path = "../storage" }
 wal = { path = "../wal" }
+txn = { path = "../txn" }

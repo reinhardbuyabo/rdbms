@@ -4,6 +4,7 @@ use crate::schema::{DataType, Schema};
 use std::any::Any;
 use std::sync::{Arc, Mutex, MutexGuard};
 use storage::{BufferPoolManager, FlushMode, Page, PageId, PAGE_LSN_SIZE, PAGE_SIZE};
+use txn::{LockKey, LockMode, TxnId};
 
 const HEADER_DATA_SIZE: usize = 16;
 const HEADER_SIZE: usize = PAGE_LSN_SIZE + HEADER_DATA_SIZE;
@@ -61,7 +62,7 @@ impl BlobStore {
             let chunk = &bytes[offset..offset + chunk_len];
             offset += chunk_len;
             {
-                let mut page_guard = self.fetch_page(*page_id)?;
+                let mut page_guard = self.fetch_page_exclusive(*page_id)?;
                 write_blob_header(&mut page_guard, next_page, chunk_len as u32)?;
                 let payload_offset = blob_payload_offset();
                 if !page_guard.write_bytes(payload_offset, chunk) {
@@ -102,7 +103,7 @@ impl BlobStore {
                 ));
             }
             let (next_page, _payload_len, chunk) = {
-                let page_guard = self.fetch_page(page_id)?;
+                let page_guard = self.fetch_page_with_lock(page_id, LockMode::Shared)?;
                 if page_guard.lsn() != 0 {
                     return Err(ExecutionError::Execution(
                         "blob page has unexpected WAL LSN".to_string(),
@@ -146,10 +147,31 @@ impl BlobStore {
         Ok(output)
     }
 
-    fn fetch_page(&self, page_id: PageId) -> ExecutionResult<storage::PageGuard<'_>> {
+    fn fetch_page_with_lock(
+        &self,
+        page_id: PageId,
+        mode: LockMode,
+    ) -> ExecutionResult<storage::PageGuard<'_>> {
+        if let (Some(lock_manager), Some(txn_id)) =
+            (wal::current_lock_manager(), wal::current_txn_id())
+        {
+            let txn_id = TxnId(txn_id);
+            match mode {
+                LockMode::Shared => lock_manager
+                    .lock_shared(txn_id, LockKey::Page(page_id))
+                    .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?,
+                LockMode::Exclusive => lock_manager
+                    .lock_exclusive(txn_id, LockKey::Page(page_id))
+                    .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?,
+            }
+        }
         self.buffer_pool.fetch_page(page_id)?.ok_or_else(|| {
             ExecutionError::Execution("buffer pool has no available frame".to_string())
         })
+    }
+
+    fn fetch_page_exclusive(&self, page_id: PageId) -> ExecutionResult<storage::PageGuard<'_>> {
+        self.fetch_page_with_lock(page_id, LockMode::Exclusive)
     }
 }
 
@@ -189,6 +211,38 @@ impl TableHeap {
         Ok(())
     }
 
+    #[allow(dead_code)]
+    fn fetch_page(&self, page_id: PageId) -> ExecutionResult<storage::PageGuard<'_>> {
+        self.fetch_page_with_lock(page_id, LockMode::Shared)
+    }
+
+    fn fetch_page_exclusive(&self, page_id: PageId) -> ExecutionResult<storage::PageGuard<'_>> {
+        self.fetch_page_with_lock(page_id, LockMode::Exclusive)
+    }
+
+    pub fn fetch_page_with_lock(
+        &self,
+        page_id: PageId,
+        mode: LockMode,
+    ) -> ExecutionResult<storage::PageGuard<'_>> {
+        if let (Some(lock_manager), Some(txn_id)) =
+            (wal::current_lock_manager(), wal::current_txn_id())
+        {
+            let txn_id = TxnId(txn_id);
+            match mode {
+                LockMode::Shared => lock_manager
+                    .lock_shared(txn_id, LockKey::Page(page_id))
+                    .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?,
+                LockMode::Exclusive => lock_manager
+                    .lock_exclusive(txn_id, LockKey::Page(page_id))
+                    .map_err(|err| ExecutionError::Execution(format!("lock error: {err:?}")))?,
+            }
+        }
+        self.buffer_pool.fetch_page(page_id)?.ok_or_else(|| {
+            ExecutionError::Execution("buffer pool has no available frame".to_string())
+        })
+    }
+
     pub fn insert_tuple(&self, tuple: &Tuple, schema: &Schema) -> ExecutionResult<Rid> {
         let tuple_bytes = encode_tuple(tuple, schema, &self.blob_store)?;
         let mut current_page_id = self.first_page_id()?;
@@ -209,7 +263,7 @@ impl TableHeap {
             let mut needs_new_page = false;
 
             {
-                let mut page_guard = self.fetch_page(page_id)?;
+                let mut page_guard = self.fetch_page_exclusive(page_id)?;
                 let mut header = read_header(&page_guard)?;
                 let slot_area = HEADER_SIZE + header.slot_count as usize * SLOT_SIZE;
                 let free_space_offset = header.free_space_offset as usize;
@@ -257,7 +311,7 @@ impl TableHeap {
                 let new_page_id = self.allocate_page()?;
                 let mut update_dirty = false;
                 {
-                    let mut page_guard = self.fetch_page(page_id)?;
+                    let mut page_guard = self.fetch_page_exclusive(page_id)?;
                     let mut header = read_header(&page_guard)?;
                     if header.next_page_id.is_none() {
                         header.next_page_id = Some(new_page_id);
@@ -275,7 +329,7 @@ impl TableHeap {
 
     pub fn get_tuple(&self, rid: Rid, schema: &Schema) -> ExecutionResult<Option<Tuple>> {
         let result = {
-            let page_guard = self.fetch_page(rid.page_id)?;
+            let page_guard = self.fetch_page_with_lock(rid.page_id, LockMode::Shared)?;
             let result: ExecutionResult<Option<Vec<u8>>> = (|| {
                 let header = read_header(&page_guard)?;
                 if rid.slot_id < header.slot_count {
@@ -299,7 +353,7 @@ impl TableHeap {
     pub fn delete_tuple(&self, rid: Rid) -> ExecutionResult<bool> {
         let mut deleted = false;
         {
-            let mut page_guard = self.fetch_page(rid.page_id)?;
+            let mut page_guard = self.fetch_page_exclusive(rid.page_id)?;
             let header = read_header(&page_guard)?;
             if rid.slot_id < header.slot_count {
                 if let Some(mut slot) = read_slot(&page_guard, rid.slot_id as usize)? {
@@ -319,7 +373,7 @@ impl TableHeap {
         let tuple_bytes = encode_tuple(tuple, schema, &self.blob_store)?;
         let mut updated = false;
         let needs_reinsert = {
-            let mut page_guard = self.fetch_page(rid.page_id)?;
+            let mut page_guard = self.fetch_page_exclusive(rid.page_id)?;
             let header = read_header(&page_guard)?;
             if rid.slot_id >= header.slot_count {
                 return Err(ExecutionError::Execution(
@@ -361,7 +415,7 @@ impl TableHeap {
         let mut current_page_id = self.first_page_id()?;
         while let Some(page_id) = current_page_id {
             let result = {
-                let page_guard = self.fetch_page(page_id)?;
+                let page_guard = self.fetch_page_with_lock(page_id, LockMode::Shared)?;
                 let header = read_header(&page_guard)?;
                 let mut tuples = Vec::new();
                 for slot_index in 0..header.slot_count as usize {
@@ -394,17 +448,11 @@ impl TableHeap {
             ExecutionError::Execution("buffer pool has no free frames".to_string())
         })?;
         {
-            let mut page_guard = self.fetch_page(page_id)?;
+            let mut page_guard = self.fetch_page_exclusive(page_id)?;
             initialize_page(&mut page_guard)?;
         }
         self.buffer_pool.unpin_page(page_id, true)?;
         Ok(page_id)
-    }
-
-    fn fetch_page(&self, page_id: PageId) -> ExecutionResult<storage::PageGuard<'_>> {
-        self.buffer_pool.fetch_page(page_id)?.ok_or_else(|| {
-            ExecutionError::Execution("buffer pool has no available frame".to_string())
-        })
     }
 
     fn first_page_guard(&self) -> ExecutionResult<MutexGuard<'_, Option<PageId>>> {
@@ -447,7 +495,9 @@ impl PhysicalOperator for SeqScan {
             };
 
             let (header, tuple, advance_page) = {
-                let page_guard = self.table_heap.fetch_page(page_id)?;
+                let page_guard = self
+                    .table_heap
+                    .fetch_page_with_lock(page_id, LockMode::Shared)?;
                 let header = read_header(&page_guard)?;
                 let mut tuple = None;
                 let mut advance_page = false;
