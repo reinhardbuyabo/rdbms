@@ -611,7 +611,20 @@ fn write_bytes_logged(page: &mut Page, offset: usize, bytes: &[u8]) -> Execution
         ));
     }
     if let Some(lsn) = lsn {
-        if lsn > page.lsn() {
+        let current_page_lsn = page.lsn();
+        // DEBUG: This should help identify the LSN issue
+        eprintln!(
+            "DEBUG: page_id={}, write_lsn={}, current_page_lsn={}, lsn_comparison={}",
+            page_id,
+            lsn,
+            current_page_lsn,
+            if lsn > current_page_lsn {
+                "GREATER"
+            } else {
+                "NOT_GREATER"
+            }
+        );
+        if lsn > current_page_lsn {
             page.set_lsn(lsn);
         }
     }

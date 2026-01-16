@@ -60,7 +60,7 @@ impl Engine {
             recovery,
             wal_path,
         };
-        // engine.recovery.recover(&engine.buffer_pool)?;
+        engine.recovery.recover(&engine.buffer_pool)?;
         Ok(engine)
     }
 
@@ -69,14 +69,41 @@ impl Engine {
         let txn = self.txn_manager.begin().context("begin transaction")?;
         let txn_manager = self.txn_manager.clone();
         let result = txn_manager.with_transaction(&txn, || self.execute_plan(plan));
-        match result {
+
+// DEBUG: Log the result to see what's happening
+        eprintln!("DEBUG execute_sql: result={:?}", result);
+        
+match result {
             Ok(output) => {
+                eprintln!("DEBUG: Committing transaction");
                 self.txn_manager
                     .commit(&txn)
                     .context("commit transaction")?;
                 Ok(output)
             }
             Err(error) => {
+                eprintln!("DEBUG: Rolling back transaction due to: {}", error);
+                self.txn_manager.abort(&txn).context("abort transaction")?;
+                self.recovery
+                    .rollback_transaction(&self.buffer_pool, &txn)
+                    .context("rollback transaction")?;
+                Err(error)
+            }
+        }
+            Err(error) => {
+                eprintln!("DEBUG: Rolling back transaction due to: {}", error);
+                self.txn_manager.abort(&txn).context("abort transaction")?;
+                self.recovery
+                    .rollback_transaction(&self.buffer_pool, &txn)
+                    .context("rollback transaction")?;
+                Err(error)
+            }
+        }
+            Err(error) => {
+                eprintln!(
+                    "DEBUG: Rolling back transaction {} due to: {}",
+                    txn.txn_id, error
+                );
                 self.txn_manager.abort(&txn).context("abort transaction")?;
                 self.recovery
                     .rollback_transaction(&self.buffer_pool, &txn)

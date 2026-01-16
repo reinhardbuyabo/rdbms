@@ -1853,7 +1853,12 @@ dependencies = [
 name = "txn"
 version = "0.2.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "parking_lot",
+ "rand 0.8.5",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

@@ -235,6 +235,10 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
     use std::thread;
+    
+    mod lock_tests;
+    mod integration_tests;
+}
 
     fn manager() -> LockManager {
         LockManager::new(DeadlockPolicy::Timeout(Duration::from_millis(200)))
@@ -324,4 +328,3 @@ mod tests {
         manager.unlock_all(txn);
         assert!(manager.held_keys_for(txn).is_empty());
     }
-}
