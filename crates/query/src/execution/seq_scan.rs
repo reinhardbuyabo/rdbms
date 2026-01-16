@@ -198,6 +198,10 @@ impl TableHeap {
         Ok(heap)
     }
 
+    pub fn load(first_page_id: PageId, buffer_pool: BufferPoolManager) -> ExecutionResult<Self> {
+        Ok(Self::new(buffer_pool, Some(first_page_id)))
+    }
+
     pub fn buffer_pool(&self) -> &BufferPoolManager {
         &self.buffer_pool
     }

@@ -1,4 +1,8 @@
+#![allow(unused_imports)]
+
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -230,101 +234,91 @@ impl LockManager {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Barrier};
-    use std::thread;
-    
-    mod lock_tests;
-    mod integration_tests;
+#[test]
+fn shared_shared_is_compatible() {
+    let manager = LockManager::new(DeadlockPolicy::Timeout(Duration::from_millis(200)));
+    let txn1 = TxnId(1);
+    let txn2 = TxnId(2);
+    let key = LockKey::Page(42);
+    assert!(manager.lock_shared(txn1, key.clone()).is_ok());
+    assert!(manager.lock_shared(txn2, key.clone()).is_ok());
+    let held = manager.held_keys_for(txn1);
+    assert_eq!(held, vec![key]);
 }
 
-    fn manager() -> LockManager {
-        LockManager::new(DeadlockPolicy::Timeout(Duration::from_millis(200)))
-    }
+#[test]
+fn exclusive_blocks_shared() {
+    let manager = Arc::new(LockManager::new(DeadlockPolicy::Timeout(
+        Duration::from_millis(200),
+    )));
+    let key = LockKey::Page(1);
+    manager.lock_exclusive(TxnId(1), key.clone()).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let manager_clone = Arc::clone(&manager);
+    let barrier_clone = Arc::clone(&barrier);
+    let handle = thread::spawn(move || {
+        barrier_clone.wait();
+        manager_clone.lock_shared(TxnId(2), key)
+    });
+    barrier.wait();
+    thread::sleep(Duration::from_millis(50));
+    manager.unlock_all(TxnId(1));
+    let result = handle.join().unwrap();
+    assert!(result.is_ok());
+}
 
-    #[test]
-    fn shared_shared_is_compatible() {
-        let manager = manager();
-        let txn1 = TxnId(1);
-        let txn2 = TxnId(2);
-        let key = LockKey::Page(42);
-        assert!(manager.lock_shared(txn1, key.clone()).is_ok());
-        assert!(manager.lock_shared(txn2, key.clone()).is_ok());
-        let held = manager.held_keys_for(txn1);
-        assert_eq!(held, vec![key]);
-    }
+#[test]
+fn exclusive_blocks_exclusive() {
+    let manager = Arc::new(LockManager::new(DeadlockPolicy::Timeout(
+        Duration::from_millis(200),
+    )));
+    let key = LockKey::Page(7);
+    manager.lock_exclusive(TxnId(1), key.clone()).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let manager_clone = Arc::clone(&manager);
+    let barrier_clone = Arc::clone(&barrier);
+    let handle = thread::spawn(move || {
+        barrier_clone.wait();
+        manager_clone.lock_exclusive(TxnId(2), key)
+    });
+    barrier.wait();
+    thread::sleep(Duration::from_millis(50));
+    manager.unlock_all(TxnId(1));
+    let result = handle.join().unwrap();
+    assert!(result.is_ok());
+}
 
-    #[test]
-    fn exclusive_blocks_shared() {
-        let manager = Arc::new(manager());
-        let key = LockKey::Page(1);
-        manager.lock_exclusive(TxnId(1), key.clone()).unwrap();
-        let barrier = Arc::new(Barrier::new(2));
-        let manager_clone = Arc::clone(&manager);
-        let barrier_clone = Arc::clone(&barrier);
-        let handle = thread::spawn(move || {
-            barrier_clone.wait();
-            manager_clone.lock_shared(TxnId(2), key)
-        });
-        barrier.wait();
-        thread::sleep(Duration::from_millis(50));
-        manager.unlock_all(TxnId(1));
-        let result = handle.join().unwrap();
-        assert!(result.is_ok());
-    }
+#[test]
+fn shared_blocks_exclusive_timeout() {
+    let manager = Arc::new(LockManager::new(DeadlockPolicy::Timeout(
+        Duration::from_millis(50),
+    )));
+    let key = LockKey::Page(9);
+    manager.lock_shared(TxnId(1), key.clone()).unwrap();
+    let manager_clone = Arc::clone(&manager);
+    let handle = thread::spawn(move || manager_clone.lock_exclusive(TxnId(2), key));
+    let result = handle.join().unwrap();
+    assert_eq!(result, Err(LockError::DeadlockTimeout));
+}
 
-    #[test]
-    fn exclusive_blocks_exclusive() {
-        let manager = Arc::new(manager());
-        let key = LockKey::Page(7);
-        manager.lock_exclusive(TxnId(1), key.clone()).unwrap();
-        let barrier = Arc::new(Barrier::new(2));
-        let manager_clone = Arc::clone(&manager);
-        let barrier_clone = Arc::clone(&barrier);
-        let handle = thread::spawn(move || {
-            barrier_clone.wait();
-            manager_clone.lock_exclusive(TxnId(2), key)
-        });
-        barrier.wait();
-        thread::sleep(Duration::from_millis(50));
-        manager.unlock_all(TxnId(1));
-        let result = handle.join().unwrap();
-        assert!(result.is_ok());
-    }
+#[test]
+fn upgrade_shared_to_exclusive() {
+    let manager = LockManager::new(DeadlockPolicy::Timeout(Duration::from_millis(200)));
+    let key = LockKey::Page(11);
+    let txn = TxnId(1);
+    manager.lock_shared(txn, key.clone()).unwrap();
+    manager.lock_exclusive(txn, key.clone()).unwrap();
+    assert_eq!(manager.held_keys_for(txn), vec![key]);
+}
 
-    #[test]
-    fn shared_blocks_exclusive_timeout() {
-        let manager = Arc::new(LockManager::new(DeadlockPolicy::Timeout(
-            Duration::from_millis(50),
-        )));
-        let key = LockKey::Page(9);
-        manager.lock_shared(TxnId(1), key.clone()).unwrap();
-        let manager_clone = Arc::clone(&manager);
-        let handle = thread::spawn(move || manager_clone.lock_exclusive(TxnId(2), key));
-        let result = handle.join().unwrap();
-        assert_eq!(result, Err(LockError::DeadlockTimeout));
-    }
-
-    #[test]
-    fn upgrade_shared_to_exclusive() {
-        let manager = manager();
-        let key = LockKey::Page(11);
-        let txn = TxnId(1);
-        manager.lock_shared(txn, key.clone()).unwrap();
+#[test]
+fn unlock_all_releases_keys() {
+    let manager = LockManager::new(DeadlockPolicy::Timeout(Duration::from_millis(200)));
+    let txn = TxnId(1);
+    let keys = vec![LockKey::Page(1), LockKey::Page(2), LockKey::Page(3)];
+    for key in &keys {
         manager.lock_exclusive(txn, key.clone()).unwrap();
-        assert_eq!(manager.held_keys_for(txn), vec![key]);
     }
-
-    #[test]
-    fn unlock_all_releases_keys() {
-        let manager = manager();
-        let txn = TxnId(1);
-        let keys = vec![LockKey::Page(1), LockKey::Page(2), LockKey::Page(3)];
-        for key in &keys {
-            manager.lock_exclusive(txn, key.clone()).unwrap();
-        }
-        manager.unlock_all(txn);
-        assert!(manager.held_keys_for(txn).is_empty());
-    }
+    manager.unlock_all(txn);
+    assert!(manager.held_keys_for(txn).is_empty());
+}

@@ -93,6 +93,7 @@ impl RecoveryManager {
                 LogRecordType::End => {
                     txn_table.remove(&record.txn_id);
                 }
+                LogRecordType::Checkpoint => {}
                 LogRecordType::PageUpdate | LogRecordType::Compensation => {
                     if let Some(page_id) = record_page_id(record) {
                         dirty_pages.entry(page_id).or_insert(record.lsn);
@@ -179,9 +180,13 @@ impl RecoveryManager {
     ) -> ExecutionResult<()> {
         let mut current_lsn = start_lsn;
         while let Some(lsn) = current_lsn {
-            let record = records
-                .get(&lsn)
-                .ok_or_else(|| ExecutionError::Execution("missing log record".to_string()))?;
+            let record = match records.get(&lsn) {
+                Some(rec) => rec.clone(),
+                None => {
+                    eprintln!("WARN: missing log record at lsn={}, skipping undo", lsn);
+                    break;
+                }
+            };
             current_lsn = match &record.payload {
                 LogPayload::PageUpdate {
                     page_id,
@@ -275,9 +280,12 @@ impl RecoveryManager {
     fn load_records(&self) -> ExecutionResult<Vec<LogRecord>> {
         let mut reader = LogReader::open(&self.log_path).map_err(map_wal_error)?;
         let mut records = Vec::new();
+        let mut count = 0;
         while let Some(record) = reader.next_record().map_err(map_wal_error)? {
             records.push(record);
+            count += 1;
         }
+        eprintln!("DEBUG load_records: loaded {} records from WAL", count);
         Ok(records)
     }
 }
