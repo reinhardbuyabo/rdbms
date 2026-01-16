@@ -60,7 +60,7 @@ impl Engine {
             recovery,
             wal_path,
         };
-        engine.recovery.recover(&engine.buffer_pool)?;
+        // engine.recovery.recover(&engine.buffer_pool)?;
         Ok(engine)
     }
 
