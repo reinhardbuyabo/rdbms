@@ -5,11 +5,12 @@ This document provides comprehensive instructions for running the RDBMS server i
 ## Table of Contents
 
 1. [Building from Source](#building-from-source)
-2. [Running the TCP Server](#running-the-tcp-server)
-3. [Using the REPL](#using-the-repl)
-4. [Running with Docker](#running-with-docker)
-5. [API Reference](#api-reference)
-6. [Testing](#testing)
+2. [Running REST API Service](#running-the-rest-api-service)
+3. [Running TCP Server](#running-the-tcp-server)
+4. [Using REPL](#using-the-repl)
+5. [Running with Docker](#running-with-docker)
+6. [API Reference](#api-reference)
+7. [Testing](#testing)
 
 ---
 
@@ -34,6 +35,265 @@ cargo build --release
 # Verify binaries were created
 ls -la target/release/rdbms
 ls -la target/release/rdbmsd
+```
+
+---
+
+## Running REST API Service
+
+The REST API service provides HTTP endpoints for executing SQL and managing transactions. This is the recommended approach for modern web applications.
+
+### Prerequisites
+
+- Rust 1.70 or later
+- Cargo
+
+### Basic Usage
+
+```bash
+# Build the API service
+cargo build -p api
+
+# Run with default settings (port 8080, database: ./data.db)
+cargo run -p api
+
+# Run with custom database path and port
+DB_PATH=/tmp/myapi.db PORT=3000 cargo run -p api
+
+# Run in background
+nohup cargo run -p api > /tmp/api.log 2>&1 &
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8080` | HTTP port to listen on |
+| `DB_PATH` | `./data.db` | Path to the database file |
+
+### Endpoint Overview
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/health` | Health check |
+| `POST` | `/api/sql` | Execute SQL with optional transaction |
+| `POST` | `/api/tx/begin` | Begin a new transaction |
+| `POST` | `/api/tx/{tx_id}/commit` | Commit a transaction |
+| `POST` | `/api/tx/{tx_id}/abort` | Abort a transaction |
+
+### Quick Start with Postman
+
+1. **Start the API service:**
+   ```bash
+   cargo run -p api
+   ```
+
+2. **Test health endpoint:**
+   ```bash
+   curl http://localhost:8080/api/health
+   # Expected: {"status":"healthy","version":"0.1.0"}
+   ```
+
+3. **Execute SQL (autocommit):**
+   ```bash
+   curl -X POST http://localhost:8080/api/sql \
+     -H "Content-Type: application/json" \
+     -d '{"sql": "CREATE TABLE users (id INT PRIMARY KEY, name TEXT)"}'
+   
+   curl -X POST http://localhost:8080/api/sql \
+     -H "Content-Type: application/json" \
+     -d '{"sql": "INSERT INTO users VALUES (1, \"Alice\")"}'
+   
+   curl -X POST http://localhost:8080/api/sql \
+     -H "Content-Type: application/json" \
+     -d '{"sql": "SELECT * FROM users"}'
+   ```
+
+4. **Transaction workflow:**
+   ```bash
+   # Begin transaction
+   curl -X POST http://localhost:8080/api/tx/begin \
+     -H "Content-Type: application/json"
+   # Expected: {"tx_id": "uuid-here"}
+   
+   # Execute within transaction
+   curl -X POST http://localhost:8080/api/sql \
+     -H "Content-Type: application/json" \
+     -d '{"sql": "INSERT INTO users VALUES (2, \"Bob\")", "tx_id": "uuid-here"}'
+   
+   # Commit transaction
+   curl -X POST http://localhost:8080/api/tx/uuid-here/commit \
+     -H "Content-Type: application/json"
+   ```
+
+### Postman Collection
+
+You can import the following Postman collection:
+
+```json
+{
+  "info": {
+    "name": "RDBMS API",
+    "description": "RDBMS REST API endpoints"
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/health"
+      }
+    },
+    {
+      "name": "Execute SQL (Autocommit)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/sql",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"sql\": \"SELECT * FROM users\"}"
+        }
+      }
+    },
+    {
+      "name": "Begin Transaction",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/tx/begin",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Execute SQL (Transaction)",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/sql",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"sql\": \"INSERT INTO users VALUES (1, 'Alice')\", \"tx_id\": \"{{txId}}\"}"
+        }
+      }
+    },
+    {
+      "name": "Commit Transaction",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/tx/{{txId}}/commit",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Abort Transaction",
+      "request": {
+        "method": "POST",
+        "url": "{{baseUrl}}/api/tx/{{txId}}/abort",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "txId",
+      "value": ""
+    }
+  ]
+}
+```
+
+### Basic Acceptance Test Sequence
+
+This test sequence verifies the core functionality of the REST API:
+
+```bash
+#!/bin/bash
+# Basic acceptance test for RDBMS REST API
+
+BASE_URL="http://localhost:8080/api"
+
+# 1. Health check
+echo "Testing health endpoint..."
+curl -s $BASE_URL/health | jq .
+
+# 2. Create table
+echo "Creating table..."
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "CREATE TABLE test_users (id INT PRIMARY KEY, name TEXT)"}' | jq .
+
+# 3. Insert data (autocommit)
+echo "Inserting data..."
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "INSERT INTO test_users VALUES (1, \"Alice\")"}' | jq .
+
+# 4. Query data
+echo "Querying data..."
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT * FROM test_users"}' | jq .
+
+# 5. Transaction test
+echo "Testing transactions..."
+TX_ID=$(curl -s -X POST $BASE_URL/tx/begin \
+  -H "Content-Type: application/json" | jq -r .tx_id)
+
+echo "Transaction ID: $TX_ID"
+
+# Insert within transaction
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d "{\"sql\": \"INSERT INTO test_users VALUES (2, 'Bob')\", \"tx_id\": \"$TX_ID\"}" | jq .
+
+# Query within transaction
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d "{\"sql\": \"SELECT * FROM test_users\", \"tx_id\": \"$TX_ID\"}" | jq .
+
+# Commit transaction
+curl -s -X POST $BASE_URL/tx/$TX_ID/commit \
+  -H "Content-Type: application/json" | jq .
+
+# 6. Verify data after commit
+echo "Querying after commit..."
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "SELECT * FROM test_users"}' | jq .
+
+# 7. Cleanup
+curl -s -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql": "DROP TABLE test_users"}' | jq .
 ```
 
 ---
@@ -270,7 +530,90 @@ func main() {
 
 ## API Reference
 
-### Request Format
+This section covers both the REST API and TCP API interfaces.
+
+### REST API
+
+#### SQL Execution Request
+
+```json
+POST /api/sql
+{
+  "sql": "SELECT * FROM users",
+  "tx_id": "optional-transaction-id"
+}
+```
+
+#### Transaction Management
+
+```json
+POST /api/tx/begin
+Response: {"tx_id": "uuid"}
+
+POST /api/tx/{tx_id}/commit
+Response: {"message": "Transaction committed"}
+
+POST /api/tx/{tx_id}/abort
+Response: {"message": "Transaction aborted"}
+```
+
+#### Health Check
+
+```json
+GET /api/health
+Response: {"status": "healthy", "version": "0.1.0"}
+```
+
+#### REST API Response Format
+
+**Query Result:**
+
+```json
+{
+  "columns": ["id", "name", "email"],
+  "rows": [
+    [{"type": "int", "value": 1}, {"type": "text", "value": "Alice"}, {"type": "text", "value": "alice@example.com"}]
+  ],
+  "rows_affected": null,
+  "message": null
+}
+```
+
+**Insert/Update/Delete Result:**
+
+```json
+{
+  "columns": null,
+  "rows": null,
+  "rows_affected": 1,
+  "message": "INSERT 0 1"
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "error_code": "SQL_PARSE_ERROR",
+  "message": "syntax error near 'FROM'"
+}
+```
+
+**Error Codes:**
+
+| Error Code | Description | HTTP Status |
+|------------|-------------|--------------|
+| `SQL_PARSE_ERROR` | SQL syntax error | 400 |
+| `CATALOG_ERROR` | Table not found or schema error | 400 |
+| `CONSTRAINT_VIOLATION` | Primary key, unique, or check constraint | 400 |
+| `TX_NOT_FOUND` | Transaction ID not found | 404 |
+| `TRANSACTION_ERROR` | General transaction error | 400 |
+| `EXECUTION_ERROR` | General execution error | 400 |
+| `INTERNAL_ERROR` | Server internal error | 500 |
+
+### TCP API
+
+#### Request Format
 
 ```json
 {
@@ -279,7 +622,7 @@ func main() {
 }
 ```
 
-### Response Format
+#### Response Format
 
 **Success:**
 
@@ -318,7 +661,7 @@ func main() {
 }
 ```
 
-### Supported Methods
+#### Supported Methods
 
 | Method | Description | Example |
 |--------|-------------|---------|
