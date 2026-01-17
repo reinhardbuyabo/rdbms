@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use storage::BufferPoolManager;
 use wal::{
-    log_compensation, LogManager, LogPayload, LogReader, LogRecord, LogRecordType, Transaction,
-    TransactionHandle,
+    LogManager, LogPayload, LogReader, LogRecord, LogRecordType, Transaction, TransactionHandle,
+    log_compensation,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,12 +54,18 @@ impl RecoveryManager {
         buffer_pool: &BufferPoolManager,
         txn: &TransactionHandle,
     ) -> ExecutionResult<()> {
-        let records = self.load_records()?;
-        let record_map = build_record_map(&records);
         let txn_guard = txn.lock();
         let last_lsn = txn_guard.last_lsn;
         let txn_id = txn_guard.txn_id;
         drop(txn_guard);
+
+        // Flush WAL to ensure all records are on disk before reading
+        if let Some(lsn) = last_lsn {
+            self.log_manager.flush(lsn).map_err(map_wal_error)?;
+        }
+
+        let records = self.load_records()?;
+        let record_map = build_record_map(&records);
         self.undo_single(buffer_pool, &record_map, txn_id, last_lsn, txn)?;
         let end_lsn = self
             .log_manager

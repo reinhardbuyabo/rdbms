@@ -2,7 +2,7 @@ use parking_lot::{Condvar, Mutex};
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -553,6 +553,7 @@ pub struct LogManager {
     state: Arc<Mutex<LogState>>,
     condvar: Arc<Condvar>,
     sender: mpsc::Sender<FlushRequest>,
+    path: PathBuf,
 }
 
 struct FlushRequest {
@@ -579,13 +580,13 @@ impl LogManager {
     }
 
     pub fn open_with_buffer(path: impl AsRef<Path>, buffer_size: usize) -> WalResult<Self> {
-        let path_ref = path.as_ref();
+        let path_ref = path.as_ref().to_path_buf();
         let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
-            .open(path_ref)?;
+            .open(&path_ref)?;
         let len = file.metadata()?.len();
         file.seek(SeekFrom::End(0))?;
         let state = Arc::new(Mutex::new(LogState {
@@ -621,6 +622,7 @@ impl LogManager {
             state,
             condvar,
             sender,
+            path: path_ref,
         })
     }
 
@@ -740,13 +742,27 @@ impl LogManager {
 
     pub fn truncate(&self, up_to_lsn: Lsn) -> WalResult<()> {
         let mut state = self.state.lock();
-        if up_to_lsn <= state.active_start_lsn {
-            return Ok(());
-        }
         state.active_start_lsn = up_to_lsn;
-        if !state.active.is_empty() && up_to_lsn >= state.active_start_lsn {
+        if !state.active.is_empty() {
             state.active.clear();
         }
+        drop(state);
+
+        if up_to_lsn > 0 {
+            let file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&self.path)?;
+            file.set_len(up_to_lsn)?;
+        } else {
+            let file = OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(&self.path)?;
+            file.set_len(0)?;
+        }
+
         Ok(())
     }
 
