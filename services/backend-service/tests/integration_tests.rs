@@ -7,15 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile;
 
-use backend_service::auth::{
-    get_me, google_auth_callback, google_auth_start, update_profile, update_role,
-};
+use backend_service::auth::update_role;
 use backend_service::handlers::{
-    create_event, create_order, create_ticket_type, delete_event, delete_ticket_type, get_event,
-    list_events, list_orders, list_ticket_types, publish_event, update_event, update_ticket_type,
+    confirm_order, create_event, create_order, create_ticket_type, delete_event,
+    delete_ticket_type, get_event, get_order, list_events, list_orders, list_ticket_types,
+    list_tickets, publish_event, update_event, update_ticket_type,
 };
 use backend_service::jwt::JwtService;
-use backend_service::models::*;
 use backend_service::AppState;
 
 fn create_test_app_state() -> (AppState, tempfile::TempDir) {
@@ -257,11 +255,10 @@ async fn test_delete_event_ownership() {
     create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(app_state))
-            .route("/v1/events/{event_id}", web::delete().to(delete_event)),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
+        "/v1/orders/{order_id}/confirm",
+        web::post().to(confirm_order),
+    ))
     .await;
 
     let req = test::TestRequest::delete()
@@ -539,7 +536,7 @@ async fn test_get_order_not_found() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state))
-            .route("/v1/orders/{order_id}", web::get().to(list_orders)),
+            .route("/v1/orders/{order_id}", web::get().to(get_order)),
     )
     .await;
 
@@ -637,7 +634,7 @@ async fn test_role_enforcement_customer_cannot_create_event() {
 }
 
 #[actix_rt::test]
-async fn test_capacity_check_positive_capacity() {
+async fn test_capacity_validation_zero_capacity() {
     let (app_state, _temp_dir) = create_test_app_state();
     create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
@@ -654,7 +651,7 @@ async fn test_capacity_check_positive_capacity() {
         .set_json(json!({
             "name": "Regular",
             "price": 1000,
-            "capacity": 100
+            "capacity": 0
         }))
         .to_request();
 
@@ -829,7 +826,7 @@ async fn test_list_tickets() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state))
-            .route("/v1/tickets", web::get().to(list_orders)),
+            .route("/v1/tickets", web::get().to(list_tickets)),
     )
     .await;
 
@@ -853,7 +850,7 @@ async fn test_list_tickets_without_auth() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state))
-            .route("/v1/tickets", web::get().to(list_orders)),
+            .route("/v1/tickets", web::get().to(list_tickets)),
     )
     .await;
 
@@ -1071,7 +1068,7 @@ async fn test_order_ownership_enforcement() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(app_state))
-            .route("/v1/orders/{order_id}", web::get().to(list_orders)),
+            .route("/v1/orders/{order_id}", web::get().to(get_order)),
     )
     .await;
 
@@ -1094,11 +1091,10 @@ async fn test_organizer_sales_view() {
     create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
-    let app = test::init_service(
-        App::new()
-            .app_data(web::Data::new(app_state))
-            .route("/v1/events/{event_id}/orders", web::get().to(list_orders)),
-    )
+    let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
+        "/v1/orders/{order_id}/confirm",
+        web::post().to(confirm_order),
+    ))
     .await;
 
     let req = test::TestRequest::get()

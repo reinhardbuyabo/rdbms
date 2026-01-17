@@ -274,14 +274,40 @@ impl TableInfo {
             .find(|index| index.columns.len() == 1 && index.columns[0].eq_ignore_ascii_case(column))
     }
 
+    pub fn seed_auto_increment_counter(&self) -> ExecutionResult<()> {
+        let mut max_id: i64 = 0;
+        for (idx, column) in self.columns.iter().enumerate() {
+            if column.auto_increment {
+                for (_, tuple) in self.heap.scan_tuples(&self.schema)? {
+                    if let Ok(id) = tuple.values()[idx].as_i64() {
+                        if id > max_id {
+                            max_id = id;
+                        }
+                    }
+                }
+                let mut counter = self.auto_increment_counter.lock();
+                *counter = max_id;
+                break;
+            }
+        }
+        Ok(())
+    }
+
     pub fn insert_tuple(&self, tuple: &Tuple) -> ExecutionResult<Rid> {
         let mut tuple_with_autoinc: Vec<Value> = tuple.values().to_vec();
 
         for (idx, column) in self.columns.iter().enumerate() {
-            if column.auto_increment && tuple_with_autoinc[idx].is_null() {
-                let mut counter = self.auto_increment_counter.lock();
-                *counter += 1;
-                tuple_with_autoinc[idx] = Value::Integer(*counter);
+            if column.auto_increment {
+                if tuple_with_autoinc[idx].is_null() {
+                    let mut counter = self.auto_increment_counter.lock();
+                    *counter += 1;
+                    tuple_with_autoinc[idx] = Value::Integer(*counter);
+                } else if let Ok(explicit_id) = tuple_with_autoinc[idx].as_i64() {
+                    let mut counter = self.auto_increment_counter.lock();
+                    if explicit_id >= *counter {
+                        *counter = explicit_id + 1;
+                    }
+                }
             }
         }
 

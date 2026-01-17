@@ -3,7 +3,7 @@
 ## Problem Summary
 
 The backend service tests were failing with:
-```
+```text
 Failed to insert user: missing value for non-nullable column id
 ```
 

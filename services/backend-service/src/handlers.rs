@@ -548,8 +548,8 @@ pub async fn create_event(
             .as_ref()
             .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string()),
-        create_req.start_time,
-        create_req.end_time,
+        escape_sql_string(&create_req.start_time),
+        escape_sql_string(&create_req.end_time),
         now,
         now
     );
@@ -557,9 +557,8 @@ pub async fn create_event(
     match engine.execute_sql(&insert_sql) {
         Ok(_) => {
             let select_sql = format!(
-                "SELECT id, organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at FROM events WHERE organizer_user_id = {} AND title = '{}' ORDER BY id DESC LIMIT 1",
-                user.id.unwrap(),
-                escape_sql_string(&create_req.title)
+                "SELECT id, organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at FROM events WHERE organizer_user_id = {} ORDER BY id DESC LIMIT 1",
+                user.id.unwrap()
             );
             match engine.execute_sql(&select_sql) {
                 Ok(ReplOutput::Rows { mut rows, .. }) => {
@@ -595,13 +594,13 @@ pub async fn list_events(
         "SELECT id, organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at FROM events WHERE 1=1",
     );
     if let Some(status) = query.get("status") {
-        sql.push_str(&format!(" AND status = '{}'", status));
+        sql.push_str(&format!(" AND status = '{}'", escape_sql_string(status)));
     }
     if let Some(from) = query.get("from") {
-        sql.push_str(&format!(" AND start_time >= '{}'", from));
+        sql.push_str(&format!(" AND start_time >= '{}'", escape_sql_string(from)));
     }
     if let Some(to) = query.get("to") {
-        sql.push_str(&format!(" AND end_time <= '{}'", to));
+        sql.push_str(&format!(" AND end_time <= '{}'", escape_sql_string(to)));
     }
     if let Some(q) = query.get("q") {
         sql.push_str(&format!(
@@ -935,12 +934,12 @@ pub async fn create_ticket_type(
         create_req
             .sales_start
             .as_ref()
-            .map(|s| format!("'{}'", s))
+            .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string()),
         create_req
             .sales_end
             .as_ref()
-            .map(|s| format!("'{}'", s))
+            .map(|s| format!("'{}'", escape_sql_string(s)))
             .unwrap_or_else(|| "NULL".to_string()),
         now,
         now
@@ -948,7 +947,7 @@ pub async fn create_ticket_type(
 
     match engine.execute_sql(&insert_sql) {
         Ok(_) => {
-            let select_sql = format!("SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types WHERE event_id = {} AND name = '{}' ORDER BY id DESC LIMIT 1", event_id, escape_sql_string(&create_req.name));
+            let select_sql = format!("SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types WHERE event_id = {} ORDER BY id DESC LIMIT 1", event_id);
             match engine.execute_sql(&select_sql) {
                 Ok(ReplOutput::Rows { mut rows, .. }) => {
                     if let Some(row) = rows.pop() {
@@ -1279,17 +1278,17 @@ pub async fn create_order(
                 now
             );
             if let Err(e) = engine.execute_sql(&insert_ticket_sql) {
-                let rollback_sql = format!("DELETE FROM orders WHERE id = {}", order_id);
-                let _ = engine.execute_sql(&rollback_sql);
                 let delete_tickets_sql =
                     format!("DELETE FROM tickets WHERE order_id = {}", order_id);
                 let _ = engine.execute_sql(&delete_tickets_sql);
+                let rollback_sql = format!("DELETE FROM orders WHERE id = {}", order_id);
+                let _ = engine.execute_sql(&rollback_sql);
                 return Ok(HttpResponse::InternalServerError().json(json!({"error": "CREATION_ERROR", "message": format!("Failed to create tickets: {}", e)})));
             }
         }
     }
 
-    match load_order_by_id(&data, order_id).await {
+    match load_order_by_id_locked(&mut engine, order_id) {
         Ok(order) => Ok(HttpResponse::Created().json(json!({"order": order, "message": "Order created successfully. Please confirm payment."}))),
         Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "CREATION_ERROR", "message": format!("Failed to reload order: {}", e)}))),
     }
@@ -1338,7 +1337,17 @@ pub async fn confirm_order(
 
     match engine.execute_sql(&sql) {
         Ok(_) => {
-            let _ = engine.execute_sql(&update_tickets_sql);
+            if let Err(e) = engine.execute_sql(&update_tickets_sql) {
+                let rollback_sql = format!(
+                    "UPDATE orders SET status = 'PENDING', updated_at = '{}' WHERE id = {}",
+                    Utc::now().format("%Y-%m-%d %H:%M:%S"),
+                    order_id
+                );
+                let _ = engine.execute_sql(&rollback_sql);
+                return Ok(HttpResponse::InternalServerError().json(
+                    json!({"error": "CONFIRM_ERROR", "message": format!("Failed to update tickets: {}", e)}),
+                ));
+            }
             match load_order_by_id_locked(&mut engine, order_id) {
                 Ok(updated_order) => Ok(HttpResponse::Ok().json(json!({"order": updated_order, "message": "Order confirmed and payment received"}))),
                 Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "CONFIRM_ERROR", "message": format!("Failed to reload order: {}", e)}))),

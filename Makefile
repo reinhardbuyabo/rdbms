@@ -89,7 +89,7 @@ run-server-release: build-release
 run-backend-service: build
 	@echo "$(GREEN)Starting backend-service on port $(PORT)$(NC)"
 	@echo "$(GREEN)Database: $(DB_PATH)$(NC)"
-	@DB_PATH=$(DB_PATH) PORT=$(PORT) cargo run -p backend-service
+	@DB_PATH=$(DB_PATH) PORT=$(PORT) cargo run -p backend_service
 
 run-backend-service-release: build-release
 	@echo "$(GREEN)Starting backend-service on port $(PORT)$(NC)"

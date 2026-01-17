@@ -52,7 +52,7 @@ cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings && cargo t
 
 ## Project Structure
 
-```
+```text
 /home/reinhard/jan-capstone/
 ├── crates/          # Core Rust crates
 │   ├── common/      # Shared utilities

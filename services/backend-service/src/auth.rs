@@ -154,16 +154,35 @@ pub async fn update_role(
 
     match jwt_service.verify_token(token) {
         Ok(claims) => {
-            let user_id: i64 = claims
+            let requester_id: i64 = claims
                 .sub
                 .parse()
                 .map_err(|_| actix_web::error::ErrorBadRequest("Invalid user ID in token"))?;
 
-            let role = req.into_inner().role;
+            let role_change_req = req.into_inner();
 
-            let user = update_user_role(&data, user_id, role).await.map_err(|e| {
-                actix_web::error::ErrorBadRequest(format!("Failed to update role: {}", e))
+            let requester = load_user_by_id(&data, requester_id).await.map_err(|e| {
+                actix_web::error::ErrorBadRequest(format!("Failed to load requester: {}", e))
             })?;
+
+            match role_change_req.role {
+                UserRole::ORGANIZER => {
+                    if requester.role != UserRole::ORGANIZER {
+                        return Ok(HttpResponse::Forbidden().json(json!({
+                            "error": "FORBIDDEN",
+                            "message": "Only organizers can assign organizer role"
+                        })));
+                    }
+                }
+                UserRole::CUSTOMER => {}
+            }
+
+            let user =
+                update_user_role(&data, role_change_req.target_user_id, role_change_req.role)
+                    .await
+                    .map_err(|e| {
+                        actix_web::error::ErrorBadRequest(format!("Failed to update role: {}", e))
+                    })?;
 
             Ok(HttpResponse::Ok().json(json!({
                 "user": user,
@@ -510,19 +529,24 @@ async fn update_user_profile(
 ) -> anyhow::Result<User> {
     let mut engine = data.engine.lock();
 
-    let name_part = name
-        .map(|n| format!("name = '{}'", escape_sql_string(&n)))
-        .unwrap_or_else(|| "name = name".to_string());
+    let mut set_parts = Vec::new();
 
-    let phone_part = phone
-        .map(|p| format!("phone = '{}'", escape_sql_string(&p)))
-        .unwrap_or_else(|| "phone = NULL".to_string());
+    if let Some(ref n) = name {
+        set_parts.push(format!("name = '{}'", escape_sql_string(n)));
+    }
+
+    if let Some(ref p) = phone {
+        set_parts.push(format!("phone = '{}'", escape_sql_string(p)));
+    }
+
+    set_parts.push(format!(
+        "updated_at = '{}'",
+        Utc::now().format("%Y-%m-%d %H:%M:%S")
+    ));
 
     let update_sql = format!(
-        "UPDATE users SET {}, {}, updated_at = '{}' WHERE id = {}",
-        name_part,
-        phone_part,
-        Utc::now().format("%Y-%m-%d %H:%M:%S"),
+        "UPDATE users SET {} WHERE id = {}",
+        set_parts.join(", "),
         user_id
     );
 

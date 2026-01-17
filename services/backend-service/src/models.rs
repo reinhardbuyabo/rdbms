@@ -88,6 +88,7 @@ pub struct UserUpdateRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RoleChangeRequest {
+    pub target_user_id: i64,
     pub role: UserRole,
 }
 
