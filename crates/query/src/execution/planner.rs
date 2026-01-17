@@ -278,12 +278,10 @@ impl TableInfo {
         let mut tuple_with_autoinc: Vec<Value> = tuple.values().to_vec();
 
         for (idx, column) in self.columns.iter().enumerate() {
-            if column.auto_increment {
-                if tuple_with_autoinc[idx].is_null() {
-                    let mut counter = self.auto_increment_counter.lock();
-                    *counter += 1;
-                    tuple_with_autoinc[idx] = Value::Integer(*counter);
-                }
+            if column.auto_increment && tuple_with_autoinc[idx].is_null() {
+                let mut counter = self.auto_increment_counter.lock();
+                *counter += 1;
+                tuple_with_autoinc[idx] = Value::Integer(*counter);
             }
         }
 

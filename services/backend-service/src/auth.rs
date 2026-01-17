@@ -1,7 +1,7 @@
-use actix_web::{HttpRequest, HttpResponse, Result, web};
-use anyhow::{Context, anyhow};
+use actix_web::{web, HttpRequest, HttpResponse, Result};
+use anyhow::{anyhow, Context};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::time::Duration;
 use url::form_urlencoded;
@@ -318,8 +318,8 @@ async fn upsert_user(data: &AppState, google_user: &GoogleUserInfo) -> anyhow::R
                 create_user(&mut engine, google_user)
             }
         }
-        Ok(other) => create_user(&mut engine, google_user),
-        Err(e) => create_user(&mut engine, google_user),
+        Ok(_other) => create_user(&mut engine, google_user),
+        Err(_e) => create_user(&mut engine, google_user),
     }
 }
 
@@ -477,7 +477,7 @@ fn create_user(
                 Err(anyhow!("Failed to retrieve created user"))
             }
         }
-        Ok(other) => Err(anyhow!("Failed to query created user")),
+        Ok(_other) => Err(anyhow!("Failed to query created user")),
         Err(e) => Err(anyhow!("Failed to query created user: {}", e)),
     }
 }
