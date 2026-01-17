@@ -1,8 +1,9 @@
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use anyhow::{anyhow, Context};
-use chrono::Utc;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::time::Duration;
 use url::form_urlencoded;
 
 use crate::jwt::JwtService;
@@ -107,7 +108,9 @@ pub async fn get_me(req: HttpRequest, data: web::Data<AppState>) -> Result<HttpR
         }
     };
 
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret".to_string());
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| actix_web::error::ErrorInternalServerError("JWT_SECRET not set"))?;
+
     let jwt_service = JwtService::new(&jwt_secret);
 
     match jwt_service.verify_token(token) {
@@ -138,7 +141,10 @@ async fn exchange_code_for_token(code: &str) -> anyhow::Result<Value> {
     let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:8080/auth/google/callback".to_string());
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
     let response = client
         .post(GOOGLE_TOKEN_URL)
         .form(&[
@@ -161,7 +167,10 @@ async fn exchange_code_for_token(code: &str) -> anyhow::Result<Value> {
 }
 
 async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserInfo> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
     let response = client
         .get(GOOGLE_USER_INFO_URL)
         .bearer_auth(access_token)
@@ -325,19 +334,20 @@ fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {
     let email = values[2].as_str()?.to_string();
     let name = values[3].as_str().ok().map(|s: &str| s.to_string());
     let avatar_url = values[4].as_str().ok().map(|s: &str| s.to_string());
+
     let created_at_str = values[5]
         .as_str()
         .map_err(|_| anyhow!("Invalid created_at value"))?;
-    let created_at = chrono::DateTime::parse_from_rfc3339(created_at_str)
-        .with_context(|| format!("Invalid created_at timestamp: {}", created_at_str))?
-        .with_timezone(&chrono::Utc);
+    let created_at_naive = NaiveDateTime::parse_from_str(created_at_str, "%Y-%m-%d %H:%M:%S")
+        .with_context(|| format!("Invalid created_at timestamp: {}", created_at_str))?;
+    let created_at: DateTime<Utc> = DateTime::from_naive_utc_and_offset(created_at_naive, Utc);
 
     let updated_at_str = values[6]
         .as_str()
         .map_err(|_| anyhow!("Invalid updated_at value"))?;
-    let updated_at = chrono::DateTime::parse_from_rfc3339(updated_at_str)
-        .with_context(|| format!("Invalid updated_at timestamp: {}", updated_at_str))?
-        .with_timezone(&chrono::Utc);
+    let updated_at_naive = NaiveDateTime::parse_from_str(updated_at_str, "%Y-%m-%d %H:%M:%S")
+        .with_context(|| format!("Invalid updated_at timestamp: {}", updated_at_str))?;
+    let updated_at: DateTime<Utc> = DateTime::from_naive_utc_and_offset(updated_at_naive, Utc);
 
     Ok(User {
         id,
