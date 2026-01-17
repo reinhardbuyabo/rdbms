@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use storage::BufferPoolManager;
 use wal::{
-    LogManager, LogPayload, LogReader, LogRecord, LogRecordType, Transaction, TransactionHandle,
-    log_compensation,
+    log_compensation, LogManager, LogPayload, LogReader, LogRecord, LogRecordType, Transaction,
+    TransactionHandle,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

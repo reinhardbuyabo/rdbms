@@ -75,9 +75,39 @@ impl Engine {
             .flush_all_pages_with_mode(storage::FlushMode::Force)
             .context("flush pages for checkpoint")?;
         self.log_manager.force_flush().context("force flush WAL")?;
+        self.persist_catalog()?;
+        Ok(())
+    }
+
+    fn persist_catalog(&self) -> Result<()> {
         let catalog_path = self.wal_path.with_extension("catalog");
-        self.persist_catalog(&catalog_path)
-            .context("persist catalog at checkpoint")?;
+        self._persist_catalog(&catalog_path)
+    }
+
+    pub fn begin_transaction(&mut self) -> Result<wal::TransactionHandle> {
+        self.txn_manager.begin().context("begin transaction")
+    }
+
+    pub fn execute_sql_in_transaction(
+        &mut self,
+        sql: &str,
+        txn: &wal::TransactionHandle,
+    ) -> Result<ReplOutput> {
+        let plan = sql_to_logical_plan(sql)?;
+        let txn_manager = self.txn_manager.clone();
+        txn_manager.with_transaction(txn, || self.execute_plan(plan))
+    }
+
+    pub fn commit_transaction(&mut self, txn: &wal::TransactionHandle) -> Result<()> {
+        self.txn_manager.commit(txn).context("commit transaction")?;
+        Ok(())
+    }
+
+    pub fn abort_transaction(&mut self, txn: &wal::TransactionHandle) -> Result<()> {
+        self.txn_manager.abort(txn).context("abort transaction")?;
+        self.recovery
+            .rollback_transaction(&self.buffer_pool, txn)
+            .context("rollback transaction")?;
         Ok(())
     }
 
@@ -200,12 +230,16 @@ impl Engine {
             }
         }
         self.catalog.register_table_info(table);
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
     fn drop_table(&mut self, table_name: &str, if_exists: bool) -> Result<ReplOutput> {
         match self.catalog.drop_table(table_name) {
-            Ok(()) => Ok(ReplOutput::Message("OK".to_string())),
+            Ok(()) => {
+                self.persist_catalog()?;
+                Ok(ReplOutput::Message("OK".to_string()))
+            }
             Err(_) if if_exists => Ok(ReplOutput::Message("OK".to_string())),
             Err(err) => Err(anyhow!(err)),
         }
@@ -215,6 +249,7 @@ impl Engine {
         self.catalog
             .rename_table(table_name, new_table_name)
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -227,6 +262,7 @@ impl Engine {
         self.catalog
             .rename_column(table_name, old_column_name, new_column_name)
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -238,6 +274,7 @@ impl Engine {
         self.catalog
             .add_column(table_name, column_def.clone())
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -249,6 +286,7 @@ impl Engine {
         self.catalog
             .drop_column(table_name, column_name)
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -323,7 +361,7 @@ impl Engine {
         Ok(ReplOutput::Rows { schema, rows })
     }
 
-    fn persist_catalog(&self, path: &Path) -> Result<()> {
+    fn _persist_catalog(&self, path: &Path) -> Result<()> {
         #[derive(Serialize)]
         struct SerializedCatalog {
             tables: Vec<SerializedTable>,
@@ -546,8 +584,7 @@ impl Drop for Engine {
     fn drop(&mut self) {
         use storage::FlushMode;
         let _ = self.buffer_pool.flush_all_pages_with_mode(FlushMode::Force);
-        let catalog_path = self.wal_path.with_extension("catalog");
-        if let Err(e) = self.persist_catalog(&catalog_path) {
+        if let Err(e) = self.persist_catalog() {
             eprintln!("WARN: failed to persist catalog: {}", e);
         }
     }
