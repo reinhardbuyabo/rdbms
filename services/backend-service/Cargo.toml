@@ -1,5 +1,5 @@
 [package]
-name = "backend-service"
+name = "backend_service"
 version = "0.2.0"
 edition = "2021"
 description = "Backend service with embedded RDBMS - exposes database over REST API for frontend consumption"

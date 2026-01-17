@@ -8,35 +8,32 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
-use wal::Transaction;
 
-mod auth;
-mod handlers;
-mod jwt;
-mod models;
+pub mod app_state;
+pub mod auth;
+pub mod handlers;
+pub mod jwt;
+pub mod models;
 
-use auth::*;
-use handlers::*;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub engine: Arc<Mutex<Engine>>,
-    pub transactions: Arc<Mutex<HashMap<String, Arc<Mutex<Transaction>>>>>,
-}
+use crate::app_state::AppState;
+use crate::auth::{get_me, google_auth_callback, google_auth_start, update_profile, update_role};
+use crate::handlers::{
+    abort_transaction, begin_transaction, commit_transaction, confirm_order, create_event,
+    create_order, create_ticket_type, delete_event, delete_ticket_type, execute_sql, get_event,
+    get_order, health, list_events, list_orders, list_ticket_types, list_tickets, publish_event,
+    update_event, update_ticket_type,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "backend-service")]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Database file path
     #[arg(short, long, default_value = "./data.db")]
     db: PathBuf,
 
-    /// Port to listen on
     #[arg(short, long, default_value = "8080")]
     port: u16,
 
-    /// Bind address (for TCP socket binding)
     #[arg(long, default_value = "0.0.0.0")]
     bind: String,
 }
@@ -47,7 +44,6 @@ async fn main() -> AnyhowResult<()> {
 
     let args = Args::parse();
 
-    // Allow environment variables to override CLI args
     let db_path: PathBuf = if let Ok(path) = env::var("DB_PATH") {
         path.into()
     } else {
@@ -109,7 +105,39 @@ async fn main() -> AnyhowResult<()> {
                     .route("/google/start", web::get().to(google_auth_start))
                     .route("/google/callback", web::get().to(google_auth_callback)),
             )
-            .route("/me", web::get().to(get_me))
+            .service(
+                web::scope("/v1")
+                    .route("/users/me", web::get().to(get_me))
+                    .route("/users/me/role", web::post().to(update_role))
+                    .route("/users/me", web::patch().to(update_profile))
+                    .route("/events", web::post().to(create_event))
+                    .route("/events", web::get().to(list_events))
+                    .route("/events/{event_id}", web::get().to(get_event))
+                    .route("/events/{event_id}", web::patch().to(update_event))
+                    .route("/events/{event_id}", web::delete().to(delete_event))
+                    .route("/events/{event_id}/publish", web::post().to(publish_event))
+                    .route(
+                        "/events/{event_id}/ticket-types",
+                        web::post().to(create_ticket_type),
+                    )
+                    .route(
+                        "/events/{event_id}/ticket-types",
+                        web::get().to(list_ticket_types),
+                    )
+                    .route(
+                        "/events/{event_id}/ticket-types/{ticket_type_id}",
+                        web::patch().to(update_ticket_type),
+                    )
+                    .route(
+                        "/events/{event_id}/ticket-types/{ticket_type_id}",
+                        web::delete().to(delete_ticket_type),
+                    )
+                    .route("/orders", web::post().to(create_order))
+                    .route("/orders", web::get().to(list_orders))
+                    .route("/orders/{order_id}", web::get().to(get_order))
+                    .route("/orders/{order_id}/confirm", web::post().to(confirm_order))
+                    .route("/tickets", web::get().to(list_tickets)),
+            )
     })
     .bind(&bind_addr)
     .context("Failed to bind server")?

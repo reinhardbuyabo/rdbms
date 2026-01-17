@@ -37,6 +37,36 @@ pub struct SuccessResponse {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum UserRole {
+    CUSTOMER,
+    ORGANIZER,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "status")]
+pub enum EventStatus {
+    DRAFT,
+    PUBLISHED,
+    CANCELLED,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "status")]
+pub enum OrderStatus {
+    PENDING,
+    PAID,
+    CANCELLED,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "status")]
+pub enum TicketStatus {
+    HELD,
+    ISSUED,
+    VOID,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct User {
     pub id: Option<i64>,
@@ -44,8 +74,182 @@ pub struct User {
     pub email: String,
     pub name: Option<String>,
     pub avatar_url: Option<String>,
+    pub role: UserRole,
+    pub phone: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UserUpdateRequest {
+    pub name: Option<String>,
+    pub phone: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RoleChangeRequest {
+    pub role: UserRole,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Event {
+    pub id: Option<i64>,
+    pub organizer_user_id: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub venue: Option<String>,
+    pub location: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+    pub status: EventStatus,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateEventRequest {
+    pub title: String,
+    pub description: Option<String>,
+    pub venue: Option<String>,
+    pub location: Option<String>,
+    pub start_time: String,
+    pub end_time: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateEventRequest {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub venue: Option<String>,
+    pub location: Option<String>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EventWithTicketTypes {
+    pub event: Event,
+    pub ticket_types: Vec<TicketTypeWithAvailability>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TicketType {
+    pub id: Option<i64>,
+    pub event_id: i64,
+    pub name: String,
+    pub price: i64,
+    pub capacity: i64,
+    pub sales_start: Option<String>,
+    pub sales_end: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TicketTypeWithAvailability {
+    pub id: Option<i64>,
+    pub event_id: i64,
+    pub name: String,
+    pub price: i64,
+    pub capacity: i64,
+    pub sold: i64,
+    pub remaining: i64,
+    pub sales_start: Option<String>,
+    pub sales_end: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateTicketTypeRequest {
+    pub name: String,
+    pub price: i64,
+    pub capacity: i64,
+    pub sales_start: Option<String>,
+    pub sales_end: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateTicketTypeRequest {
+    pub name: Option<String>,
+    pub price: Option<i64>,
+    pub capacity: Option<i64>,
+    pub sales_start: Option<String>,
+    pub sales_end: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Order {
+    pub id: Option<i64>,
+    pub customer_user_id: i64,
+    pub status: OrderStatus,
+    pub total_amount: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrderWithDetails {
+    pub order: Order,
+    pub tickets: Vec<TicketWithDetails>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrderItemRequest {
+    pub ticket_type_id: i64,
+    pub quantity: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CreateOrderRequest {
+    pub items: Vec<OrderItemRequest>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Ticket {
+    pub id: Option<i64>,
+    pub order_id: i64,
+    pub ticket_type_id: i64,
+    pub unit_price: i64,
+    pub status: TicketStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TicketWithDetails {
+    pub id: Option<i64>,
+    pub order_id: i64,
+    pub ticket_type_id: i64,
+    pub unit_price: i64,
+    pub status: TicketStatus,
+    pub ticket_type_name: String,
+    pub ticket_type_price: i64,
+    pub event_id: i64,
+    pub event_title: String,
+    pub event_start_time: String,
+    pub event_end_time: String,
+    pub event_venue: Option<String>,
+    pub event_location: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EventSalesSummary {
+    pub event_id: i64,
+    pub event_title: String,
+    pub total_orders: i64,
+    pub total_tickets: i64,
+    pub total_revenue: i64,
+    pub orders: Vec<OrderWithCustomer>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrderWithCustomer {
+    pub order: Order,
+    pub customer_id: i64,
+    pub customer_name: Option<String>,
+    pub customer_email: String,
+    pub tickets: Vec<TicketWithDetails>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,10 +264,10 @@ pub struct GoogleUserInfo {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String, // Internal user ID
+    pub sub: String,
     pub email: String,
-    pub exp: usize, // Expiration time
-    pub iat: usize, // Issued at
+    pub exp: usize,
+    pub iat: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,5 +288,23 @@ pub struct MeResponse {
     pub user: User,
 }
 
-// Re-export SerializableValue from db::printer
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListEventsQuery {
+    pub status: Option<EventStatus>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub q: Option<String>,
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaginatedResponse<T> {
+    pub data: Vec<T>,
+    pub page: u32,
+    pub limit: u32,
+    pub total: u64,
+    pub total_pages: u32,
+}
+
 pub use db::printer::SerializableValue;
