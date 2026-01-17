@@ -49,6 +49,13 @@ impl LogicalPlanner {
             }
             Statement::Delete(delete) => self.plan_delete(delete),
             Statement::CreateTable(ct) => self.plan_create_table(ct),
+            Statement::CreateIndex(create_index) => self.plan_create_index(
+                create_index.name,
+                create_index.table_name,
+                create_index.columns,
+                create_index.if_not_exists,
+                create_index.unique,
+            ),
             Statement::Drop {
                 object_type,
                 if_exists,
@@ -538,6 +545,37 @@ impl LogicalPlanner {
             table_name,
             columns: column_defs,
             if_not_exists: ct.if_not_exists,
+        })
+    }
+
+    fn plan_create_index(
+        &mut self,
+        index_name: Option<ObjectName>,
+        table_name: ObjectName,
+        columns: Vec<OrderByExpr>,
+        if_not_exists: bool,
+        unique: bool,
+    ) -> Result<LogicalPlan> {
+        let table_name = object_name_to_string(&table_name);
+        let index_name = index_name
+            .map(|name| object_name_to_string(&name))
+            .unwrap_or_else(|| format!("idx_{}", table_name));
+
+        if columns.is_empty() {
+            bail!("CREATE INDEX requires at least one column");
+        }
+
+        let column = match &columns[0].expr {
+            SqlExpr::Identifier(ident) => ident.value.clone(),
+            _ => bail!("CREATE INDEX only supports simple column references"),
+        };
+
+        Ok(LogicalPlan::CreateIndex {
+            table_name,
+            index_name,
+            column_name: column,
+            if_not_exists,
+            unique,
         })
     }
 

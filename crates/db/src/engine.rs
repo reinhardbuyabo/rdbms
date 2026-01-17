@@ -166,6 +166,19 @@ impl Engine {
                 table_name,
                 column_name,
             } => self.alter_table_drop_column(&table_name, &column_name),
+            LogicalPlan::CreateIndex {
+                table_name,
+                index_name,
+                column_name,
+                if_not_exists,
+                unique,
+            } => self.create_index(
+                &table_name,
+                &index_name,
+                &column_name,
+                if_not_exists,
+                unique,
+            ),
             LogicalPlan::Insert {
                 table_name,
                 columns,
@@ -230,6 +243,51 @@ impl Engine {
             }
         }
         self.catalog.register_table_info(table);
+        self.persist_catalog()?;
+        Ok(ReplOutput::Message("OK".to_string()))
+    }
+
+    fn create_index(
+        &mut self,
+        table_name: &str,
+        index_name: &str,
+        column_name: &str,
+        if_not_exists: bool,
+        unique: bool,
+    ) -> Result<ReplOutput> {
+        let table = match self.catalog.table(table_name) {
+            Some(t) => t,
+            None => bail!("table {} does not exist", table_name),
+        };
+
+        let column_exists = table.columns.iter().any(|c| c.name == column_name);
+        if !column_exists {
+            bail!(
+                "column {} does not exist in table {}",
+                column_name,
+                table_name
+            );
+        }
+
+        let index_exists = table.indexes.iter().any(|i| i.name == index_name);
+        if index_exists {
+            if if_not_exists {
+                return Ok(ReplOutput::Message("OK".to_string()));
+            }
+            bail!(
+                "index {} already exists on table {}",
+                index_name,
+                table_name
+            );
+        }
+
+        let table_mut = self
+            .catalog
+            .table_mut(table_name)
+            .ok_or_else(|| anyhow!("table {} does not exist", table_name))?;
+        table_mut
+            .create_index(index_name, column_name, unique, false)
+            .map_err(|err| anyhow!(err))?;
         self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }

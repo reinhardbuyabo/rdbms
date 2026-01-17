@@ -64,5 +64,11 @@ CREATE TABLE IF NOT EXISTS tickets (
   FOREIGN KEY (owner_id) REFERENCES users(id)
 );
 
--- Note: Index creation (CREATE INDEX) is not supported by this engine
--- The query planner handles index selection internally
+-- Indexes for join-heavy endpoint queries
+CREATE INDEX IF NOT EXISTS idx_events_organizer_id ON events(organizer_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_types_event_id ON ticket_types(event_id);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_event_id ON orders(event_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_order_id ON tickets(order_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_event_id ON tickets(event_id);
+CREATE INDEX IF NOT EXISTS idx_tickets_owner_id ON tickets(owner_id);

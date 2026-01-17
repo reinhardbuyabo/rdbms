@@ -81,6 +81,13 @@ pub enum LogicalPlan {
         table_name: String,
         column_name: String,
     },
+    CreateIndex {
+        table_name: String,
+        index_name: String,
+        column_name: String,
+        if_not_exists: bool,
+        unique: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,6 +229,7 @@ impl LogicalPlan {
                 visible: true,
             }]),
             LogicalPlan::CreateTable { .. }
+            | LogicalPlan::CreateIndex { .. }
             | LogicalPlan::DropTable { .. }
             | LogicalPlan::AlterTableRename { .. }
             | LogicalPlan::AlterTableRenameColumn { .. }
@@ -463,6 +471,20 @@ impl LogicalPlan {
             } => format!(
                 "{}AlterTable {} DROP COLUMN {}",
                 prefix, table_name, column_name
+            ),
+            LogicalPlan::CreateIndex {
+                table_name,
+                index_name,
+                column_name,
+                unique,
+                ..
+            } => format!(
+                "{}CreateIndex {} ON {} ({}{})",
+                prefix,
+                index_name,
+                table_name,
+                if *unique { "UNIQUE " } else { "" },
+                column_name
             ),
         }
     }
@@ -707,6 +729,22 @@ impl LogicalPlan {
                 column_name,
             } => {
                 let label = format!("AlterTable {} Drop Column {}", table_name, column_name);
+                (label, vec![])
+            }
+            LogicalPlan::CreateIndex {
+                table_name,
+                index_name,
+                column_name,
+                unique,
+                ..
+            } => {
+                let label = format!(
+                    "CreateIndex {}{} ON {} ({})",
+                    if *unique { "UNIQUE " } else { "" },
+                    index_name,
+                    table_name,
+                    column_name
+                );
                 (label, vec![])
             }
         }
