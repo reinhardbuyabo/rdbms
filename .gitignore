@@ -32,3 +32,12 @@ data
 data.wal
 *.db
 *.db-journal
+
+# Database files
+*.catalog
+data.catalog
+
+# WAL files
+*.wal
+*.wal-shm
+*.wal-lock
