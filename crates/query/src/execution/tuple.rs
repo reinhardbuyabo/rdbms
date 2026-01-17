@@ -15,6 +15,20 @@ impl Value {
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
+
+    pub fn as_i64(&self) -> anyhow::Result<i64> {
+        match self {
+            Value::Integer(i) => Ok(*i),
+            _ => anyhow::bail!("Expected integer, got {:?}", self),
+        }
+    }
+
+    pub fn as_str(&self) -> anyhow::Result<&str> {
+        match self {
+            Value::String(s) => Ok(s),
+            _ => anyhow::bail!("Expected string, got {:?}", self),
+        }
+    }
 }
 
 impl From<LiteralValue> for Value {

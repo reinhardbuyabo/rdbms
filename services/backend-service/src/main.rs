@@ -10,15 +10,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use wal::Transaction;
 
+mod auth;
 mod handlers;
+mod jwt;
 mod models;
 
+use auth::*;
 use handlers::*;
 
 #[derive(Clone)]
 pub struct AppState {
-    engine: Arc<Mutex<Engine>>,
-    transactions: Arc<Mutex<HashMap<String, Arc<Mutex<Transaction>>>>>,
+    pub engine: Arc<Mutex<Engine>>,
+    pub transactions: Arc<Mutex<HashMap<String, Arc<Mutex<Transaction>>>>>,
 }
 
 #[derive(Parser, Debug)]
@@ -101,6 +104,12 @@ async fn main() -> AnyhowResult<()> {
                     .route("/tx/{tx_id}/commit", web::post().to(commit_transaction))
                     .route("/tx/{tx_id}/abort", web::post().to(abort_transaction)),
             )
+            .service(
+                web::scope("/auth")
+                    .route("/google/start", web::get().to(google_auth_start))
+                    .route("/google/callback", web::get().to(google_auth_callback)),
+            )
+            .route("/me", web::get().to(get_me))
     })
     .bind(&bind_addr)
     .context("Failed to bind server")?
