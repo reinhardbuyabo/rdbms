@@ -510,9 +510,7 @@ pub async fn create_event(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let create_req = req.into_inner();
     if create_req.title.is_empty() {
@@ -734,9 +732,7 @@ pub async fn update_event(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let event = match load_event_by_id(&data, event_id).await {
         Ok(e) => e,
@@ -817,9 +813,7 @@ pub async fn delete_event(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let event = match load_event_by_id(&data, event_id).await {
         Ok(e) => e,
@@ -856,9 +850,7 @@ pub async fn publish_event(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let event = match load_event_by_id(&data, event_id).await {
         Ok(e) => e,
@@ -903,9 +895,7 @@ pub async fn create_ticket_type(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let event = match load_event_by_id(&data, event_id).await {
         Ok(e) => e,
@@ -1007,9 +997,7 @@ pub async fn update_ticket_type(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let event = match load_event_by_id(&data, event_id).await {
         Ok(e) => e,
@@ -1109,9 +1097,7 @@ pub async fn delete_ticket_type(
         Err(e) => return Err(e),
     };
 
-    if let Err(e) = check_organizer_role(&user) {
-        return Err(e);
-    }
+    check_organizer_role(&user)?;
 
     let event = match load_event_by_id(&data, event_id).await {
         Ok(e) => e,
@@ -1186,6 +1172,7 @@ fn get_tickets_sold_for_ticket_type_locked(
     }
 }
 
+#[allow(clippy::await_holding_lock)]
 pub async fn create_order(
     req: web::Json<CreateOrderRequest>,
     data: web::Data<AppState>,
@@ -1202,6 +1189,7 @@ pub async fn create_order(
             .json(json!({"error": "VALIDATION_ERROR", "message": "Items array cannot be empty"})));
     }
 
+    #[allow(clippy::await_holding_lock)]
     let mut engine = data.engine.lock();
     let mut total_amount: i64 = 0;
     let mut ticket_type_ids = Vec::new();
@@ -1378,19 +1366,16 @@ pub async fn list_orders(data: web::Data<AppState>, req_http: HttpRequest) -> Re
         Ok(ReplOutput::Rows { mut rows, .. }) => {
             let mut orders_with_details = Vec::new();
             for row in rows.drain(..) {
-                match load_order_by_db_row(&row) {
-                    Ok(order) => {
-                        match load_tickets_for_order_locked(&mut engine, order.id.unwrap()) {
-                            Ok(tickets) => {
-                                orders_with_details.push(OrderWithDetails { order, tickets })
-                            }
-                            Err(_) => orders_with_details.push(OrderWithDetails {
-                                order,
-                                tickets: Vec::new(),
-                            }),
+                if let Ok(order) = load_order_by_db_row(&row) {
+                    match load_tickets_for_order_locked(&mut engine, order.id.unwrap()) {
+                        Ok(tickets) => {
+                            orders_with_details.push(OrderWithDetails { order, tickets })
                         }
+                        Err(_) => orders_with_details.push(OrderWithDetails {
+                            order,
+                            tickets: Vec::new(),
+                        }),
                     }
-                    Err(_) => {}
                 }
             }
             Ok(HttpResponse::Ok()
@@ -1430,10 +1415,9 @@ pub async fn get_order(
             .json(json!({"error": "NOT_OWNER", "message": "You do not own this order"})));
     }
 
-    let tickets = match load_tickets_for_order(&data, order_id).await {
-        Ok(t) => t,
-        Err(_) => Vec::new(),
-    };
+    let tickets = load_tickets_for_order(&data, order_id)
+        .await
+        .unwrap_or_default();
     let order_with_details = OrderWithDetails { order, tickets };
 
     Ok(HttpResponse::Ok().json(order_with_details))
