@@ -1,7 +1,7 @@
-use actix_web::{web, HttpRequest, HttpResponse, Result};
-use anyhow::{anyhow, Context};
+use actix_web::{HttpRequest, HttpResponse, Result, web};
+use anyhow::{Context, anyhow};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
 use url::form_urlencoded;
@@ -312,13 +312,14 @@ async fn upsert_user(data: &AppState, google_user: &GoogleUserInfo) -> anyhow::R
                     .execute_sql(&update_sql)
                     .context("Failed to update user")?;
 
-                load_user_by_db_row(&row)
+                let user_id = row.values()[0].as_i64().unwrap();
+                load_user_by_id_locked(&mut engine, user_id)
             } else {
                 create_user(&mut engine, google_user)
             }
         }
-        Ok(_) => create_user(&mut engine, google_user),
-        Err(_e) => create_user(&mut engine, google_user),
+        Ok(other) => create_user(&mut engine, google_user),
+        Err(e) => create_user(&mut engine, google_user),
     }
 }
 
@@ -459,7 +460,9 @@ fn create_user(
         now
     );
 
-    engine.execute_sql(&insert_sql)?;
+    if let Err(e) = engine.execute_sql(&insert_sql) {
+        return Err(anyhow!("Failed to insert user: {}", e));
+    }
 
     let select_sql = format!(
         "SELECT id, google_sub, email, name, avatar_url, role, phone, created_at, updated_at FROM users WHERE google_sub = '{}'",
@@ -474,7 +477,8 @@ fn create_user(
                 Err(anyhow!("Failed to retrieve created user"))
             }
         }
-        _ => Err(anyhow!("Failed to query created user")),
+        Ok(other) => Err(anyhow!("Failed to query created user")),
+        Err(e) => Err(anyhow!("Failed to query created user: {}", e)),
     }
 }
 
@@ -530,7 +534,16 @@ async fn update_user_profile(
 fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {
     let values = row.values();
 
-    let id = Some(values[0].as_i64()?);
+    if values.is_empty() {
+        return Err(anyhow!("Empty row returned"));
+    }
+
+    let id = match values[0].as_i64() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            return Err(anyhow!("Failed to get id: {}", e));
+        }
+    };
     let google_sub = values[1].as_str()?.to_string();
     let email = values[2].as_str()?.to_string();
     let name = values[3].as_str().ok().map(|s: &str| s.to_string());
@@ -681,10 +694,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_user_role() {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let db_path = temp_file.path();
+        let temp_dir = tempfile::Builder::new().prefix("test").tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
 
-        let engine = db::engine::Engine::new(db_path).unwrap();
+        let engine = db::engine::Engine::new(&db_path).unwrap();
         let transactions = Arc::new(Mutex::new(HashMap::new()));
         let app_state = AppState {
             engine: Arc::new(Mutex::new(engine)),

@@ -322,6 +322,10 @@ impl Engine {
                     continue;
                 }
                 if values[idx].is_null() && !field.nullable {
+                    let column_def = table.columns.get(idx);
+                    if column_def.map(|c| c.auto_increment).unwrap_or(false) {
+                        continue;
+                    }
                     bail!("missing value for non-nullable column {}", field.name);
                 }
             }
@@ -482,6 +486,7 @@ impl Engine {
             primary_key: bool,
             unique: bool,
             default_value: Option<SerializedDefaultValue>,
+            auto_increment: bool,
         }
 
         #[derive(Deserialize, Clone)]
@@ -550,6 +555,7 @@ impl Engine {
                         primary_key: c.primary_key,
                         unique: c.unique,
                         default_value: c.default_value.as_ref().map(|v| (*v).clone().into()),
+                        auto_increment: c.auto_increment,
                     })
                 })
                 .collect();

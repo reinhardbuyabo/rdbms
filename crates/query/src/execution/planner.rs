@@ -12,7 +12,9 @@ use crate::expr::{BinaryOperator, Expr};
 use crate::index::{BPlusTree, Index, IndexKey, IndexKeyType};
 use crate::logical_plan::{Assignment, JoinType, LogicalPlan};
 use crate::schema::{ColumnDef, DataType, Field, Schema};
+use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct IndexInfo {
@@ -32,6 +34,7 @@ pub struct TableInfo {
     pub columns: Vec<ColumnDef>,
     pub heap: TableHeap,
     pub indexes: Vec<IndexInfo>,
+    pub auto_increment_counter: Arc<Mutex<i64>>,
 }
 
 impl TableInfo {
@@ -46,6 +49,7 @@ impl TableInfo {
                 primary_key: false,
                 unique: false,
                 default_value: None,
+                auto_increment: false,
             })
             .collect();
         Self {
@@ -54,6 +58,7 @@ impl TableInfo {
             columns,
             heap,
             indexes: Vec::new(),
+            auto_increment_counter: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -69,6 +74,7 @@ impl TableInfo {
             columns,
             heap,
             indexes: Vec::new(),
+            auto_increment_counter: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -269,9 +275,23 @@ impl TableInfo {
     }
 
     pub fn insert_tuple(&self, tuple: &Tuple) -> ExecutionResult<Rid> {
+        let mut tuple_with_autoinc: Vec<Value> = tuple.values().to_vec();
+
+        for (idx, column) in self.columns.iter().enumerate() {
+            if column.auto_increment {
+                if tuple_with_autoinc[idx].is_null() {
+                    let mut counter = self.auto_increment_counter.lock();
+                    *counter += 1;
+                    tuple_with_autoinc[idx] = Value::Integer(*counter);
+                }
+            }
+        }
+
+        let new_tuple = Tuple::new(tuple_with_autoinc);
+
         let mut keys = Vec::with_capacity(self.indexes.len());
         for (idx, index) in self.indexes.iter().enumerate() {
-            let key = Self::key_from_tuple(tuple, &index.column_indices, &index.key_types)?;
+            let key = Self::key_from_tuple(&new_tuple, &index.column_indices, &index.key_types)?;
             if index.unique && !index.index.get(&key)?.is_empty() {
                 return Err(ExecutionError::ConstraintViolation {
                     table: self.name.clone(),
@@ -282,7 +302,7 @@ impl TableInfo {
             keys.push((idx, key));
         }
 
-        let rid = self.heap.insert_tuple(tuple, &self.schema)?;
+        let rid = self.heap.insert_tuple(&new_tuple, &self.schema)?;
         for (idx, key) in keys {
             if let Err(error) = self.indexes[idx].index.insert(key, rid) {
                 let _ = self.heap.delete_tuple(rid);
