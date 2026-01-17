@@ -9,7 +9,7 @@ use db::repl::run_repl;
 #[derive(Parser, Debug)]
 #[command(name = "rdbms", about = "Interactive SQL REPL")]
 struct Args {
-    #[arg(long, value_name = "PATH", default_value = "data")]
+    #[arg(long, value_name = "PATH", default_value = "./data.db")]
     db: PathBuf,
 }
 

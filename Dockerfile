@@ -19,8 +19,9 @@ RUN mkdir -p target/release && \
 # Copy source and build
 COPY . .
 
-# Build both binaries
+# Build all binaries: REPL, TCP server, and backend-service (REST API)
 RUN cargo build --release -p db --features tcp-server
+RUN cargo build --release -p backend-service
 
 # Runtime stage
 FROM alpine:3.19 AS runtime
@@ -38,26 +39,48 @@ RUN mkdir -p /data && chown -R app:app /data
 # Copy binaries from builder
 COPY --from=builder /app/target/release/rdbmsd /usr/local/bin/
 COPY --from=builder /app/target/release/rdbms /usr/local/bin/
+COPY --from=builder /app/target/release/backend-service /usr/local/bin/
 
 # Switch to non-root user
 USER app
 
-# Expose default port
-EXPOSE 5432
+# Expose default ports
+# 5432 - TCP server (rdbmsd)
+# 8080 - REST API (backend-service)
+EXPOSE 5432 8080
 
-# Health check
+# Health check for TCP server
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD nc -z localhost 5432 || exit 1
 
-# Use entrypoint script to handle database initialization
+# Entrypoint handles both server modes
 COPY --chmod=755 <<'EOF' /entrypoint.sh
 #!/bin/sh
-DB_PATH="/data/mydb"
-if [ ! -f "$DB_PATH" ]; then
-    mkdir -p "$(dirname "$DB_PATH")"
-fi
-exec rdbmsd --db "$DB_PATH" --listen "0.0.0.0:5432"
+
+# Default configuration
+DB_PATH="${DB_PATH:-/data/database.db}"
+LISTEN="${LISTEN:-0.0.0.0:5432}"
+SERVICE="${SERVICE:-tcp}"
+
+# Ensure data directory exists
+mkdir -p "$(dirname "$DB_PATH")"
+
+case "$SERVICE" in
+    tcp)
+        echo "Starting RDBMS TCP server on $LISTEN..."
+        exec rdbmsd --db "$DB_PATH" --listen "$LISTEN"
+        ;;
+    api)
+        echo "Starting RDBMS REST API on port 8080..."
+        exec backend-service --db "$DB_PATH" --port 8080
+        ;;
+    *)
+        echo "Unknown service mode: $SERVICE"
+        echo "Use SERVICE=tcp or SERVICE=api"
+        exit 1
+        ;;
+esac
 EOF
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["--db", "/data/mydb", "--listen", "0.0.0.0:5432"]
+CMD ["--db", "/data/database.db", "--listen", "0.0.0.0:5432"]

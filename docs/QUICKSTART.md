@@ -7,10 +7,11 @@ A lightweight embedded RDBMS with full ACID transaction support, written in Rust
 1. [Quick Start](#quick-start)
 2. [Building from Source](#building-from-source)
 3. [Using the REPL](#using-the-repl)
-4. [Using the REST API](#using-the-rest-api)
-5. [Running with Docker](#running-with-docker)
-6. [Example CRUD Operations](#example-crud-operations)
-7. [Transaction Demo](#transaction-demo)
+4. [Using the Backend Service](#using-the-backend-service)
+5. [Using the TCP Server](#using-the-tcp-server)
+6. [Running with Docker](#running-with-docker)
+7. [Example CRUD Operations](#example-crud-operations)
+8. [Transaction Demo](#transaction-demo)
 
 ---
 
@@ -30,7 +31,7 @@ tar -xzf rdbms-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
 ```bash
 git clone https://github.com/reinhardbuyabo/rdbms.git
 cd rdbms
-cargo build --release
+make build-release
 ```
 
 ---
@@ -50,25 +51,26 @@ cargo build --release
 git clone https://github.com/reinhardbuyabo/rdbms.git
 cd rdbms
 
-# Build all components
-cargo build --release
-
-# Build only the REPL
-cargo build --release -p db
-
-# Build only the API service
-cargo build --release -p api
+# Build all components (REPL, TCP server, and backend-service)
+make build-release
 
 # Verify binaries
-ls -la target/release/rdbms    # REPL binary
-ls -la target/release/rdbmsd   # Server binary
-ls -la target/release/api      # API service binary
+ls -la target/release/rdbms            # REPL binary
+ls -la target/release/rdbmsd           # TCP server binary
+ls -la target/release/backend-service  # REST API service binary
+```
+
+**Alternative (using Cargo directly):**
+```bash
+cargo build --release                    # Build all
+cargo build --release -p db              # Build REPL and TCP server
+cargo build --release -p backend-service # Build REST API service
 ```
 
 **Build Output:**
-- `target/release/rdbms` - CLI REPL (7.6 MB)
-- `target/release/rdbmsd` - TCP Server (7.6 MB)
-- `target/release/api` - REST API Service
+- `target/release/rdbms` - CLI REPL (interactive terminal)
+- `target/release/rdbmsd` - TCP Server (systemd-managed, for backend services)
+- `target/release/backend-service` - REST API Service (for frontend consumption)
 
 ---
 
@@ -79,11 +81,14 @@ The REPL provides an interactive command-line interface to the database.
 ### Start the REPL
 
 ```bash
-# Using default database (./data.db)
-./target/release/rdbms
+# Using make with default database (./data.db)
+make run-repl
 
-# Using custom database path
-./target/release/rdbms --db /path/to/your/database.db
+# Using make with custom database path
+make run-repl DB_PATH=/path/to/your/database.db
+
+# Alternative: Direct binary usage
+./target/release/rdbms --db /path/to/database.db
 ```
 
 ### REPL Commands
@@ -116,7 +121,7 @@ DROP TABLE users;
 ### Interactive Example
 
 ```bash
-$ ./target/release/rdbms --db /tmp/mydb.db
+$ make run-repl DB_PATH=/tmp/mydb.db
 RDBMS REPL v0.3.0
 Using database file: /tmp/mydb.db
 
@@ -140,21 +145,21 @@ INSERT 0 1
 
 ---
 
-## Using the REST API
+## Using the Backend Service
 
-The REST API provides HTTP endpoints for SQL execution and transaction management.
+The backend-service provides REST API endpoints for SQL execution and transaction management. This is the recommended interface for frontend applications.
 
-### Start the API Server
+### Start the Backend Service
 
 ```bash
-# With defaults (port 8080, database: ./data.db)
-cargo run -p api --release
+# Using make with defaults (port 8080, database: ./data.db)
+make run-backend-service
 
-# With custom settings
-DB_PATH=/tmp/mydb.db PORT=3000 cargo run -p api --release
+# Using make with custom settings
+make run-backend-service PORT=3000 DB_PATH=/tmp/mydb.db
 
-# Using pre-built binary
-DB_PATH=/tmp/mydb.db PORT=3000 ./target/release/api
+# Alternative: Using the release binary directly
+DB_PATH=/tmp/mydb.db PORT=3000 ./target/release/backend-service
 ```
 
 ### API Endpoints
@@ -173,6 +178,7 @@ DB_PATH=/tmp/mydb.db PORT=3000 ./target/release/api
 |----------|---------|-------------|
 | `PORT` | `8080` | HTTP server port |
 | `DB_PATH` | `./data.db` | Database file path |
+| `BIND` | `0.0.0.0` | Bind address |
 
 ### curl Examples
 
@@ -227,27 +233,100 @@ curl -X POST "http://localhost:8080/api/tx/$TX_ID/abort" \
 
 ---
 
+## Using the TCP Server
+
+The TCP server (`rdbmsd`) is a lightweight protocol server suitable for:
+- Systemd service integration
+- Backend services connecting programmatically
+- High-performance scenarios
+
+### Start the TCP Server
+
+```bash
+# Using make with defaults (port 5432, database: ./data.db)
+make run-server
+
+# Using make with custom settings
+make run-server SERVER_PORT=5432 DB_PATH=/tmp/mydb.db
+
+# Alternative: Using the release binary directly
+./target/release/rdbmsd --db /tmp/mydb.db --listen 0.0.0.0:5432
+```
+
+### Protocol (JSON-RPC style)
+
+**Request format:**
+```json
+{"method": "execute", "params": ["SQL_STATEMENT"]}
+{"method": "ping"}
+```
+
+**Response format:**
+```json
+{"status": "ok", "result": {...}, "error": null}
+{"status": "error", "result": null, "error": "error message"}
+```
+
+### Example with netcat
+
+```bash
+# Ping
+echo '{"method":"ping"}' | nc -w 2 localhost 5432
+
+# Execute SQL
+echo '{"method":"execute","params":["CREATE TABLE test (id INT, val INT);"]}' | nc -w 2 localhost 5432
+
+# Query data
+echo '{"method":"execute","params":["SELECT * FROM test;"]}' | nc -w 2 localhost 5432
+```
+
+### Systemd Integration
+
+For production deployment, install as a systemd service:
+
+```bash
+# Install (requires root)
+sudo make install-systemd
+
+# Enable on boot
+sudo systemctl enable rdbms
+
+# Start the service
+sudo systemctl start rdbms
+
+# Check status
+sudo systemctl status rdbms
+
+# View logs
+journalctl -u rdbms -f
+```
+
+---
+
 ## Running with Docker
 
 ### Build the Docker Image
 
 ```bash
-# Build the image
-docker build -t rdbms:latest .
+# Build using make
+make docker-build
 
-# Build with specific tag
-docker build -t rdbms:v0.3.0 .
+# Or using docker directly
+docker build -t rdbms:latest .
 ```
 
 ### Run the Container
 
-#### Run API Service
+#### Run TCP Server
 
 ```bash
-# Run in detached mode
+# Run using make
+make docker-run
+
+# Or using docker directly
 docker run -d \
   --name rdbms \
-  -p 8080:8080 \
+  -p 5432:5432 \
   -v $(pwd)/data:/data \
   rdbms:latest
 
@@ -255,8 +334,19 @@ docker run -d \
 docker logs -f rdbms
 
 # Stop
-docker stop rdbms
-docker rm rdbms
+make docker-stop
+# Or: docker stop rdbms && docker rm rdbms
+```
+
+#### Run Backend Service via Docker
+
+```bash
+docker run -d \
+  --name rdbms-api \
+  -p 8080:8080 \
+  -v $(pwd)/data:/data \
+  -e SERVICE=api \
+  rdbms:latest
 ```
 
 #### Run REPL Interactively
@@ -280,7 +370,7 @@ services:
     image: rdbms:latest
     container_name: rdbms
     ports:
-      - "8080:8080"
+      - "5432:5432"  # TCP server
     volumes:
       - ./data:/data
     restart: unless-stopped
@@ -329,7 +419,7 @@ DELETE FROM employees WHERE id = 2;
 SELECT * FROM employees;
 ```
 
-### Using curl
+### Using curl (Backend Service)
 
 ```bash
 BASE_URL="http://localhost:8080/api"
@@ -369,6 +459,19 @@ curl -X POST $BASE_URL/sql \
 curl -X POST $BASE_URL/sql \
   -H "Content-Type: application/json" \
   -d '{"sql":"DELETE FROM employees WHERE id = 2"}'
+```
+
+### Using netcat (TCP Server)
+
+```bash
+# Create table
+echo '{"method":"execute","params":["CREATE TABLE employees (id INT PRIMARY KEY, name TEXT, department TEXT, salary INT)"]}' | nc -w 2 localhost 5432
+
+# Insert employees
+echo '{"method":"execute","params":["INSERT INTO employees VALUES (1, '\''Alice'\'', '\''Engineering'\'', 90000)"]}' | nc -w 2 localhost 5432
+
+# Query all
+echo '{"method":"execute","params":["SELECT * FROM employees"]}' | nc -w 2 localhost 5432
 ```
 
 ---
@@ -414,7 +517,7 @@ UPDATE 1
 -- Commit is automatic in REPL mode
 ```
 
-### Transaction with curl
+### Transaction with curl (Backend Service)
 
 ```bash
 BASE_URL="http://localhost:8080/api"
@@ -462,13 +565,110 @@ curl -X POST $BASE_URL/sql \
   -d '{"sql":"SELECT * FROM accounts"}'
 ```
 
+### Testing Transaction ABORT
+
+The following demonstrates that ABORT correctly rolls back changes:
+
+```bash
+BASE_URL="http://localhost:8080/api"
+
+# Setup fresh table
+curl -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"CREATE TABLE test_abort (id INT PRIMARY KEY, val INT)"}'
+curl -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"INSERT INTO test_abort VALUES (1, 100)"}'
+
+# Initial state: val=100
+echo "Initial state (expect val=100):"
+curl -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"SELECT * FROM test_abort"}'
+
+# Begin transaction and update to 200
+TX_RESPONSE=$(curl -s -X POST $BASE_URL/tx/begin -H "Content-Type: application/json")
+TX_ID=$(echo $TX_RESPONSE | grep -o '"tx_id":"[^"]*"' | cut -d'"' -f4)
+
+curl -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d "{\"sql\":\"UPDATE test_abort SET val = 200 WHERE id = 1\",\"tx_id\":\"$TX_ID\"}"
+
+# Within transaction: val=200
+echo "Within transaction (expect val=200):"
+curl -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d "{\"sql\":\"SELECT * FROM test_abort\",\"tx_id\":\"$TX_ID\"}"
+
+# ABORT the transaction
+echo "Aborting transaction..."
+curl -X POST "$BASE_URL/tx/$TX_ID/abort" \
+  -H "Content-Type: application/json"
+
+# After abort: val=100 (correctly rolled back!)
+echo "After abort (expect val=100 - ROLLED BACK):"
+curl -X POST $BASE_URL/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"SELECT * FROM test_abort"}'
+```
+
+**Expected Output:**
+```
+Initial state: [{"type":"int","value":1},{"type":"int","value":100}]
+Within transaction: [{"type":"int","value":1},{"type":"int","value":200}]
+After abort: [{"type":"int","value":1},{"type":"int","value":100}]  ✓ Atomicity preserved!
+```
+
+---
+
+## Quick Reference
+
+### Make Commands
+
+| Command | Description |
+|---------|-------------|
+| `make build-release` | Build optimized release binaries |
+| `make run-repl` | Start REPL (use `DB_PATH=...`) |
+| `make run-server` | Start TCP server on port 5432 (use `SERVER_PORT=... DB_PATH=...`) |
+| `make run-backend-service` | Start REST API on port 8080 (use `PORT=... DB_PATH=...`) |
+| `make docker-build` | Build Docker image |
+| `make docker-run` | Run TCP server in Docker |
+| `make docker-stop` | Stop Docker containers |
+| `make install-systemd` | Install as systemd service (requires root) |
+| `make test` | Run all tests |
+
+### Binaries
+
+| Binary | Purpose | Interface |
+|--------|---------|-----------|
+| `rdbms` | Interactive REPL | Terminal |
+| `rdbmsd` | TCP Server | JSON-RPC over TCP (port 5432) |
+| `backend-service` | REST API | HTTP (port 8080) |
+
+### Examples
+
+```bash
+# Build and run REPL with custom database
+make build-release && make run-repl DB_PATH=/tmp/myapp.db
+
+# Build and run TCP server
+make build-release && make run-server SERVER_PORT=5432 DB_PATH=/tmp/myapp.db
+
+# Build and run REST API service
+make build-release && make run-backend-service PORT=3000 DB_PATH=/tmp/myapp.db
+
+# Build Docker image and run
+make docker-build && make docker-run
+```
+
 ---
 
 ## Next Steps
 
 - See [run.md](run.md) for detailed documentation
 - See [postman-testing-guide.md](postman-testing-guide.md) for Postman collection
-- Run tests: `cargo test`
+- Run tests: `make test`
+- Install as systemd service: `sudo make install-systemd`
 - Report issues: https://github.com/reinhardbuyabo/rdbms/issues
 
 ---

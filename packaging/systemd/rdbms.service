@@ -1,0 +1,51 @@
+[Unit]
+Description=RDBMS Database Server
+Documentation=https://github.com/reinhardbuyabo/rdbms
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=rdbms
+Group=rdbms
+RuntimePrefix=/run/rdbms
+RuntimeDirectory=rdbms
+RuntimeDirectoryMode=0755
+StateDirectory=rdbms
+StateDirectoryMode=0755
+LogsDirectory=rdbms
+LogsDirectoryMode=0755
+ConfigurationDirectory=rdbms
+ConfigurationDirectoryMode=0755
+
+ExecStart=/usr/local/bin/rdbmsd \
+    --db ${DB_PATH:-/var/lib/rdbms/database.db} \
+    --listen ${LISTEN:-0.0.0.0:5432}
+
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=5
+
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/rdbms /run/rdbms
+NoNewPrivileges=true
+
+Restart=on-failure
+RestartSec=5
+
+# Environment variables
+Environment=DB_PATH=/var/lib/rdbms/database.db
+Environment=LISTEN=0.0.0.0:5432
+
+# Hardening
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+
+[Install]
+WantedBy=multi-user.target

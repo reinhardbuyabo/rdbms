@@ -1,0 +1,76 @@
+{
+  "tables": [
+    {
+      "name": "users",
+      "first_page_id": 1,
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "Integer",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default_value": null
+        },
+        {
+          "name": "name",
+          "data_type": "Text",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default_value": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "users_id_pk",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "is_primary": true
+        }
+      ]
+    },
+    {
+      "name": "products",
+      "first_page_id": 16,
+      "columns": [
+        {
+          "name": "id",
+          "data_type": "Integer",
+          "nullable": false,
+          "primary_key": true,
+          "unique": true,
+          "default_value": null
+        },
+        {
+          "name": "name",
+          "data_type": "Text",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default_value": null
+        },
+        {
+          "name": "price",
+          "data_type": "Integer",
+          "nullable": true,
+          "primary_key": false,
+          "unique": false,
+          "default_value": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "products_id_pk",
+          "columns": [
+            "id"
+          ],
+          "unique": true,
+          "is_primary": true
+        }
+      ]
+    }
+  ]
+}

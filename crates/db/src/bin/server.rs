@@ -12,7 +12,7 @@ use tokio::net::{TcpListener, TcpStream};
 #[derive(Parser, Debug)]
 #[command(name = "rdbmsd", about = "RDBMS TCP Server")]
 struct Args {
-    #[arg(long, value_name = "PATH", default_value = "/data")]
+    #[arg(long, value_name = "PATH", default_value = "./data.db")]
     db: PathBuf,
 
     #[arg(long, value_name = "ADDR", default_value = "0.0.0.0:5432")]
