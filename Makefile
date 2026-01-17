@@ -1,4 +1,4 @@
-.PHONY: help build build-release test test-all clean run-repl run-server run-backend-service run-docker stop-docker docs install-systemd
+.PHONY: help build build-release test test-all clean run-repl run-server run-backend-service run-docker stop-docker docs install-systemd db-init db-init-api db-reset
 
 # Default settings
 DB_PATH ?= ./data.db
@@ -28,6 +28,13 @@ help:
 	@echo "  make run-server PORT=5432 DB_PATH=/var/lib/rdbms/db.db"
 	@echo "                      - Start server with custom settings"
 	@echo "  make run-backend-service  - Start backend-service (REST API for frontend)"
+	@echo ""
+	@echo "Database Initialization:"
+	@echo "  make db-init        - Initialize DB with schema and seed data"
+	@echo "  make db-init DB_PATH=./data.db"
+	@echo "                      - Initialize custom database path"
+	@echo "  make db-init-api    - Initialize DB via REST API (requires running service)"
+	@echo "  make db-reset       - Delete database file (for fresh start)"
 	@echo ""
 	@echo "Docker Commands:"
 	@echo "  make docker-build   - Build Docker image"
@@ -169,6 +176,21 @@ demo: build
 	@echo "SELECT * FROM demo;" | ./target/debug/rdbms --db /tmp/rdbms-demo.db 2>/dev/null || true
 	@echo ""
 	@echo "Demo database created at /tmp/rdbms-demo.db"
+
+# Database initialization
+db-init: build
+	@echo "$(GREEN)Initializing database with schema and seed data...$(NC)"
+	@./scripts/db_init.sh DB_PATH=$(DB_PATH) REPL=./target/debug/rdbms
+
+db-init-api:
+	@echo "$(GREEN)Initializing database via API...$(NC)"
+	@echo "$(YELLOW)Make sure backend-service is running on port $(PORT)$(NC)"
+	@./scripts/seed_via_api.sh API_URL=http://localhost:$(PORT)
+
+db-reset:
+	@echo "$(YELLOW)Resetting database (removing existing data)...$(NC)"
+	@rm -f $(DB_PATH) $(DB_PATH).wal $(DB_PATH).catalog 2>/dev/null || true
+	@echo "$(GREEN)Database reset complete. Run 'make db-init' to reinitialize.$(NC)"
 
 # Install binaries to /usr/local/bin
 install:
