@@ -1,7 +1,15 @@
 [package]
 name = "txn"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 
 [dependencies]
 parking_lot = "0.12"
+tempfile = "3"
+anyhow = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+rand = "0.8"
+wal = { path = "../wal" }

@@ -15,7 +15,10 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 - **B+Tree Indexes**: Composite indexes with range scan support
 - **SQL Parser**: Basic SQL support (SELECT, INSERT, UPDATE, DELETE)
 - **Blob Storage**: Large object support
-- **Multiple Access Modes**: REPL interactive mode and TCP server mode
+- **Multiple Access Modes**:
+  - REPL interactive mode (`rdbms`)
+  - TCP server mode (`rdbmsd`) - JSON-RPC over TCP
+  - REST API (`backend-service`) - HTTP API for frontend integration
 
 ## Architecture
 
@@ -24,7 +27,8 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 │                         Application                               │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   REPL CLI  │  │  TCP Server │  │     Library (lib)       │  │
+│  │   REPL CLI  │  │  TCP Server │  │    REST API Service     │  │
+│  │   (rdbms)   │  │   (rdbmsd)  │  │  (backend-service)      │  │
 │  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
 ├─────────┼────────────────┼─────────────────────┼─────────────────┤
 │         │                │                     │                 │
@@ -80,6 +84,9 @@ cargo build --release
 
 # Run as TCP server (default port 5432)
 ./target/release/rdbmsd --db ./mydb --listen 0.0.0.0:5432
+
+# Run as REST API server (default port 8080)
+./target/release/backend-service --db ./mydb --port 8080
 ```
 
 ### TCP Server API
@@ -130,6 +137,65 @@ echo '{"method":"ping"}' | nc -w 2 127.0.0.1 5432
 echo '{"method":"execute","params":["SELECT * FROM users"]}' | nc -w 2 127.0.0.1 5432
 ```
 
+### REST API (backend-service)
+
+The backend-service provides a REST API for integration with frontend applications:
+
+```bash
+# Start the server
+./target/release/backend-service --db ./mydb --port 8080
+```
+
+**Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | /api/health | Health check |
+| POST | /api/sql | Execute SQL statement |
+| POST | /api/tx/begin | Begin transaction |
+| POST | /api/tx/{id}/commit | Commit transaction |
+| POST | /api/tx/{id}/abort | Abort transaction |
+
+**Example with curl:**
+
+```bash
+# Health check
+curl http://localhost:8080/api/health
+
+# Execute SQL
+curl -X POST http://localhost:8080/api/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"CREATE TABLE users (id INT PRIMARY KEY, name TEXT)"}'
+
+# Insert data
+curl -X POST http://localhost:8080/api/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"INSERT INTO users VALUES (1, '\''Alice'\'')"}'
+
+# Query data
+curl -X POST http://localhost:8080/api/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"SELECT * FROM users"}'
+```
+
+**Transaction example:**
+
+```bash
+# Begin transaction
+TX_ID=$(curl -s -X POST http://localhost:8080/api/tx/begin | jq -r '.result.tx_id')
+
+# Execute operations within transaction
+curl -X POST http://localhost:8080/api/sql \
+  -H "Content-Type: application/json" \
+  -d "{\"sql\":\"UPDATE users SET name='Bob' WHERE id=1\", \"tx_id\":\"$TX_ID\"}"
+
+# Commit transaction
+curl -X POST http://localhost:8080/api/tx/$TX_ID/commit
+
+# Or abort
+# curl -X POST http://localhost:8080/api/tx/$TX_ID/abort
+```
+
 ### Using Docker
 
 ```bash
@@ -170,14 +236,14 @@ services:
 
 ```
 $ ./target/release/rdbms --db ./mydb
-RDBMS REPL v0.1.0
+RDBMS REPL v0.4.0
 Using database file: ./mydb
 
 rdbms> CREATE TABLE users (id INT PRIMARY KEY, name TEXT, email TEXT);
-Executed
+OK
 
 rdbms> INSERT INTO users VALUES (1, 'Alice', 'alice@example.com');
-Executed
+INSERT 0 1
 
 rdbms> SELECT * FROM users;
 +----+-------+------------------+
@@ -199,20 +265,43 @@ The TCP server accepts JSON-RPC style requests:
 {"method": "ping"}
 
 // Response
-{"status": "ok", "result": {"version": "0.1.0"}, "error": null}
+{"status": "ok", "result": {"version": "0.4.0"}, "error": null}
 
 // Request: Execute SQL (no result set)
 {"method": "execute", "params": ["CREATE TABLE t (id INT)"]}
 
 // Request: Query SQL (returns rows)
-{"method": "query", "params": ["SELECT * FROM t"]}
+{"method": "execute", "params": ["SELECT * FROM t"]}
 ```
 
 Example using netcat:
 
 ```bash
 echo '{"method": "ping"}' | nc localhost 5432
-echo '{"method": "query", "params": ["SELECT 1 as value"]}' | nc localhost 5432
+echo '{"method": "execute", "params": ["SELECT 1 as value"]}' | nc localhost 5432
+```
+
+### Using Make Commands
+
+```bash
+# Build all binaries
+make build-release
+
+# Run tests
+make test
+
+# Run REPL
+make run-repl
+
+# Run TCP server
+make run-server
+
+# Run REST API server
+make run-backend-service
+
+# Build and run Docker image
+make docker-build
+make docker-run
 ```
 
 ### Programmatic Usage
@@ -254,10 +343,21 @@ Options:
 Usage: rdbmsd [OPTIONS]
 
 Options:
-  --db <PATH>        Database directory [default: /data]
+  --db <PATH>        Database file [default: ./data.db]
   --listen <ADDR>    Listen address [default: 0.0.0.0:5432]
   --workers <N>      Number of worker threads (optional)
   --help             Print help
+```
+
+#### REST API (`backend-service`)
+```
+Usage: backend-service [OPTIONS]
+
+Options:
+  -d, --db <PATH>     Database file [default: ./data.db]
+  -p, --port <PORT>   Port to listen on [default: 8080]
+  --bind <ADDR>       Bind address [default: 0.0.0.0]
+  --help              Print help
 ```
 
 ## Supported SQL
@@ -316,6 +416,7 @@ rdbms/
 ├── Cargo.toml                 # Workspace manifest
 ├── Cargo.lock                 # Dependency lockfile
 ├── Dockerfile                 # Container image definition
+├── Makefile                   # Development commands
 ├── README.md                  # This file
 ├── crates/
 │   ├── common/               # Shared utilities
@@ -324,10 +425,14 @@ rdbms/
 │   ├── storage/              # Storage layer (buffer pool, disk)
 │   ├── txn/                  # Transaction manager (locks, ACID)
 │   └── wal/                  # Write-Ahead Log
+├── services/
+│   └── backend-service/      # REST API service (HTTP)
+├── packaging/
+│   └── systemd/              # Systemd service files
+├── docs/                     # Documentation
 ├── .github/
 │   └── workflows/
 │       └── ci.yml            # CI/CD pipeline
-│       └── pr-check.yml      # CI/CD pipeline
 └── tests/                    # Integration tests
 ```
 

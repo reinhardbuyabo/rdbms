@@ -288,23 +288,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 
 [[package]]
-name = "api"
-version = "0.1.0"
-dependencies = [
- "actix-cors",
- "actix-rt",
- "actix-web",
- "anyhow",
- "db",
- "env_logger",
- "log",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -313,6 +296,27 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "backend-service"
+version = "0.2.0"
+dependencies = [
+ "actix-cors",
+ "actix-rt",
+ "actix-web",
+ "anyhow",
+ "clap",
+ "db",
+ "env_logger",
+ "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "wal",
 ]
 
 [[package]]
@@ -464,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "console"
@@ -551,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "db"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1294,13 +1298,14 @@ dependencies = [
 
 [[package]]
 name = "query"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "common",
  "insta",
  "parking_lot",
  "rand 0.8.5",
+ "serde",
  "sqlparser",
  "storage",
  "tempfile",
@@ -1648,7 +1653,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "thiserror 1.0.69",
  "wal",
@@ -1851,9 +1856,15 @@ dependencies = [
 
 [[package]]
 name = "txn"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "parking_lot",
+ "rand 0.8.5",
+ "tempfile",
+ "tokio",
+ "wal",
 ]
 
 [[package]]
@@ -1935,7 +1946,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "wal"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "parking_lot",
  "thiserror 1.0.69",

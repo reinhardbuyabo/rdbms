@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
+
 /// Represents a SQL data type
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DataType {
     Integer,
     BigInt,
@@ -26,7 +28,7 @@ impl DataType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColumnDef {
     pub name: String,
     pub data_type: DataType,
@@ -36,7 +38,7 @@ pub struct ColumnDef {
     pub default_value: Option<DefaultValue>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DefaultValue {
     Null,
     Integer(i64),

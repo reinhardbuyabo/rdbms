@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse, Result};
 use db::printer::{ReplOutput, SerializableValue};
+use std::sync::Arc;
 
 use crate::models::*;
 use crate::AppState;
@@ -20,24 +21,14 @@ pub async fn execute_sql(
     let SqlRequest { sql, tx_id } = req.into_inner();
 
     if let Some(tx_id) = tx_id {
-        // Execute within existing transaction
         execute_in_transaction(&data, &tx_id, &sql).await
     } else {
-        // Execute with autocommit
         execute_autocommit(&data, &sql).await
     }
 }
 
 async fn execute_autocommit(data: &AppState, sql: &str) -> Result<HttpResponse> {
-    let mut engine = match data.engine.lock() {
-        Ok(engine) => engine,
-        Err(e) => {
-            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error_code: "INTERNAL_ERROR".to_string(),
-                message: format!("Failed to acquire engine lock: {}", e),
-            }));
-        }
-    };
+    let mut engine = data.engine.lock();
 
     match engine.execute_sql(sql) {
         Ok(output) => {
@@ -55,39 +46,24 @@ async fn execute_autocommit(data: &AppState, sql: &str) -> Result<HttpResponse> 
 }
 
 async fn execute_in_transaction(data: &AppState, tx_id: &str, sql: &str) -> Result<HttpResponse> {
-    // Check if transaction exists
-    let transactions = match data.transactions.lock() {
-        Ok(transactions) => transactions,
-        Err(e) => {
-            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error_code: "INTERNAL_ERROR".to_string(),
-                message: format!("Failed to acquire transactions lock: {}", e),
+    let transactions = data.transactions.lock();
+
+    let txn = match transactions.get(tx_id) {
+        Some(txn) => txn,
+        None => {
+            return Ok(HttpResponse::NotFound().json(ErrorResponse {
+                error_code: "TX_NOT_FOUND".to_string(),
+                message: format!("Transaction {} not found", tx_id),
             }));
         }
     };
 
-    if !transactions.contains_key(tx_id) {
-        return Ok(HttpResponse::NotFound().json(ErrorResponse {
-            error_code: "TX_NOT_FOUND".to_string(),
-            message: format!("Transaction {} not found", tx_id),
-        }));
-    }
-
+    let txn_clone = Arc::clone(txn);
     drop(transactions);
 
-    // For now, we'll execute in the main engine but track the transaction
-    // In a more sophisticated implementation, we'd have separate transaction contexts
-    let mut engine = match data.engine.lock() {
-        Ok(engine) => engine,
-        Err(e) => {
-            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error_code: "INTERNAL_ERROR".to_string(),
-                message: format!("Failed to acquire engine lock: {}", e),
-            }));
-        }
-    };
+    let mut engine = data.engine.lock();
 
-    match engine.execute_sql(sql) {
+    match engine.execute_sql_in_transaction(sql, &txn_clone) {
         Ok(output) => {
             let response = convert_repl_output_to_sql_response(output);
             Ok(HttpResponse::Ok().json(response))
@@ -105,21 +81,20 @@ async fn execute_in_transaction(data: &AppState, tx_id: &str, sql: &str) -> Resu
 pub async fn begin_transaction(data: web::Data<AppState>) -> Result<HttpResponse> {
     let tx_id = uuid::Uuid::new_v4().to_string();
 
-    // For simplicity, we'll just track the transaction ID
-    // In a real implementation, we'd create a separate transaction context
-    let mut transactions = match data.transactions.lock() {
-        Ok(transactions) => transactions,
+    let mut engine = data.engine.lock();
+
+    let txn = match engine.begin_transaction() {
+        Ok(txn) => txn,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error_code: "INTERNAL_ERROR".to_string(),
-                message: format!("Failed to acquire transactions lock: {}", e),
+                error_code: "TX_BEGIN_FAILED".to_string(),
+                message: format!("Failed to begin transaction: {}", e),
             }));
         }
     };
 
-    // Note: This is a simplified implementation
-    // We're not actually creating separate transaction contexts yet
-    transactions.insert(tx_id.clone(), data.engine.clone());
+    let mut transactions = data.transactions.lock();
+    transactions.insert(tx_id.clone(), txn);
 
     Ok(HttpResponse::Ok().json(TransactionResponse { tx_id }))
 }
@@ -130,20 +105,26 @@ pub async fn commit_transaction(
 ) -> Result<HttpResponse> {
     let tx_id = path.into_inner();
 
-    let mut transactions = match data.transactions.lock() {
-        Ok(transactions) => transactions,
-        Err(e) => {
-            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error_code: "INTERNAL_ERROR".to_string(),
-                message: format!("Failed to acquire transactions lock: {}", e),
+    let mut transactions = data.transactions.lock();
+
+    let txn = match transactions.remove(&tx_id) {
+        Some(txn) => txn,
+        None => {
+            return Ok(HttpResponse::NotFound().json(ErrorResponse {
+                error_code: "TX_NOT_FOUND".to_string(),
+                message: format!("Transaction {} not found", tx_id),
             }));
         }
     };
 
-    if transactions.remove(&tx_id).is_none() {
-        return Ok(HttpResponse::NotFound().json(ErrorResponse {
-            error_code: "TX_NOT_FOUND".to_string(),
-            message: format!("Transaction {} not found", tx_id),
+    drop(transactions);
+
+    let mut engine = data.engine.lock();
+
+    if let Err(e) = engine.commit_transaction(&txn) {
+        return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+            error_code: "TX_COMMIT_FAILED".to_string(),
+            message: format!("Failed to commit transaction: {}", e),
         }));
     }
 
@@ -158,20 +139,26 @@ pub async fn abort_transaction(
 ) -> Result<HttpResponse> {
     let tx_id = path.into_inner();
 
-    let mut transactions = match data.transactions.lock() {
-        Ok(transactions) => transactions,
-        Err(e) => {
-            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error_code: "INTERNAL_ERROR".to_string(),
-                message: format!("Failed to acquire transactions lock: {}", e),
+    let mut transactions = data.transactions.lock();
+
+    let txn = match transactions.remove(&tx_id) {
+        Some(txn) => txn,
+        None => {
+            return Ok(HttpResponse::NotFound().json(ErrorResponse {
+                error_code: "TX_NOT_FOUND".to_string(),
+                message: format!("Transaction {} not found", tx_id),
             }));
         }
     };
 
-    if transactions.remove(&tx_id).is_none() {
-        return Ok(HttpResponse::NotFound().json(ErrorResponse {
-            error_code: "TX_NOT_FOUND".to_string(),
-            message: format!("Transaction {} not found", tx_id),
+    drop(transactions);
+
+    let mut engine = data.engine.lock();
+
+    if let Err(e) = engine.abort_transaction(&txn) {
+        return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+            error_code: "TX_ABORT_FAILED".to_string(),
+            message: format!("Failed to abort transaction: {}", e),
         }));
     }
 

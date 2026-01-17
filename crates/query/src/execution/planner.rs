@@ -29,15 +29,44 @@ pub struct IndexInfo {
 pub struct TableInfo {
     pub name: String,
     pub schema: Schema,
+    pub columns: Vec<ColumnDef>,
     pub heap: TableHeap,
     pub indexes: Vec<IndexInfo>,
 }
 
 impl TableInfo {
     pub fn new(name: impl Into<String>, schema: Schema, heap: TableHeap) -> Self {
+        let columns: Vec<ColumnDef> = schema
+            .fields
+            .iter()
+            .map(|f| ColumnDef {
+                name: f.name.clone(),
+                data_type: f.data_type.clone(),
+                nullable: f.nullable,
+                primary_key: false,
+                unique: false,
+                default_value: None,
+            })
+            .collect();
         Self {
             name: name.into(),
             schema,
+            columns,
+            heap,
+            indexes: Vec::new(),
+        }
+    }
+
+    pub fn with_columns(
+        name: impl Into<String>,
+        schema: Schema,
+        columns: Vec<ColumnDef>,
+        heap: TableHeap,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            schema,
+            columns,
             heap,
             indexes: Vec::new(),
         }
@@ -146,6 +175,12 @@ impl TableInfo {
             )));
         }
         self.schema.fields[column_index].name = new_name.to_string();
+        for col in &mut self.columns {
+            if col.name.eq_ignore_ascii_case(old_name) {
+                col.name = new_name.to_string();
+                break;
+            }
+        }
         for index in &mut self.indexes {
             for column in &mut index.columns {
                 if column.eq_ignore_ascii_case(old_name) {
@@ -181,12 +216,13 @@ impl TableInfo {
             ));
         }
         self.schema.fields.push(Field {
-            name: column_def.name,
+            name: column_def.name.clone(),
             table: Some(self.name.clone()),
-            data_type: column_def.data_type,
+            data_type: column_def.data_type.clone(),
             nullable: column_def.nullable,
             visible: true,
         });
+        self.columns.push(column_def);
         Ok(())
     }
 
@@ -210,6 +246,13 @@ impl TableInfo {
             )));
         }
         self.schema.fields[column_index].visible = false;
+        if let Some(col_idx) = self
+            .columns
+            .iter()
+            .position(|c| c.name.eq_ignore_ascii_case(column_name))
+        {
+            self.columns.remove(col_idx);
+        }
         self.indexes.retain(|index| {
             !index
                 .columns
@@ -410,6 +453,10 @@ impl Catalog {
             .collect::<Vec<_>>();
         names.sort();
         names
+    }
+
+    pub fn tables(&self) -> impl Iterator<Item = &TableInfo> {
+        self.tables.values()
     }
 
     pub fn drop_table(&mut self, table_name: &str) -> ExecutionResult<()> {

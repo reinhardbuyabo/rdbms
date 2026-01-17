@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -8,6 +9,7 @@ use query::{
     Catalog, ColumnDef, DataType, Executor, Expr, Field, LogicalPlan, PhysicalPlanner,
     RecoveryManager, Schema, TableHeap, TableInfo, Tuple, Value, sql_to_logical_plan,
 };
+use serde::{Deserialize, Serialize};
 use storage::{BufferPoolManager, DiskManager};
 use txn::{DeadlockPolicy, LockManager};
 use wal::{LogManager, TransactionManager};
@@ -51,7 +53,9 @@ impl Engine {
             Arc::clone(&lock_manager),
         );
         let recovery = RecoveryManager::new(Arc::clone(&log_manager), &wal_path);
-        let engine = Self {
+        let catalog_path = wal_path.with_extension("catalog");
+
+        let mut engine = Self {
             catalog: Catalog::new(),
             buffer_pool,
             log_manager,
@@ -60,8 +64,51 @@ impl Engine {
             recovery,
             wal_path,
         };
+
         engine.recovery.recover(&engine.buffer_pool)?;
+        engine.load_catalog(&catalog_path)?;
         Ok(engine)
+    }
+
+    pub fn checkpoint(&mut self) -> Result<()> {
+        self.buffer_pool
+            .flush_all_pages_with_mode(storage::FlushMode::Force)
+            .context("flush pages for checkpoint")?;
+        self.log_manager.force_flush().context("force flush WAL")?;
+        self.persist_catalog()?;
+        Ok(())
+    }
+
+    fn persist_catalog(&self) -> Result<()> {
+        let catalog_path = self.wal_path.with_extension("catalog");
+        self._persist_catalog(&catalog_path)
+    }
+
+    pub fn begin_transaction(&mut self) -> Result<wal::TransactionHandle> {
+        self.txn_manager.begin().context("begin transaction")
+    }
+
+    pub fn execute_sql_in_transaction(
+        &mut self,
+        sql: &str,
+        txn: &wal::TransactionHandle,
+    ) -> Result<ReplOutput> {
+        let plan = sql_to_logical_plan(sql)?;
+        let txn_manager = self.txn_manager.clone();
+        txn_manager.with_transaction(txn, || self.execute_plan(plan))
+    }
+
+    pub fn commit_transaction(&mut self, txn: &wal::TransactionHandle) -> Result<()> {
+        self.txn_manager.commit(txn).context("commit transaction")?;
+        Ok(())
+    }
+
+    pub fn abort_transaction(&mut self, txn: &wal::TransactionHandle) -> Result<()> {
+        self.txn_manager.abort(txn).context("abort transaction")?;
+        self.recovery
+            .rollback_transaction(&self.buffer_pool, txn)
+            .context("rollback transaction")?;
+        Ok(())
     }
 
     pub fn execute_sql(&mut self, sql: &str) -> Result<ReplOutput> {
@@ -69,6 +116,7 @@ impl Engine {
         let txn = self.txn_manager.begin().context("begin transaction")?;
         let txn_manager = self.txn_manager.clone();
         let result = txn_manager.with_transaction(&txn, || self.execute_plan(plan));
+
         match result {
             Ok(output) => {
                 self.txn_manager
@@ -167,7 +215,8 @@ impl Engine {
         let heap = TableHeap::create(self.buffer_pool.clone())
             .map_err(|err| anyhow!(err))
             .context("create table heap")?;
-        let mut table = TableInfo::new(table_name.to_string(), schema, heap);
+        let mut table =
+            TableInfo::with_columns(table_name.to_string(), schema, columns.to_vec(), heap);
         for column in columns {
             if column.primary_key || column.unique {
                 let index_name = if column.primary_key {
@@ -181,12 +230,16 @@ impl Engine {
             }
         }
         self.catalog.register_table_info(table);
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
     fn drop_table(&mut self, table_name: &str, if_exists: bool) -> Result<ReplOutput> {
         match self.catalog.drop_table(table_name) {
-            Ok(()) => Ok(ReplOutput::Message("OK".to_string())),
+            Ok(()) => {
+                self.persist_catalog()?;
+                Ok(ReplOutput::Message("OK".to_string()))
+            }
             Err(_) if if_exists => Ok(ReplOutput::Message("OK".to_string())),
             Err(err) => Err(anyhow!(err)),
         }
@@ -196,6 +249,7 @@ impl Engine {
         self.catalog
             .rename_table(table_name, new_table_name)
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -208,6 +262,7 @@ impl Engine {
         self.catalog
             .rename_column(table_name, old_column_name, new_column_name)
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -219,6 +274,7 @@ impl Engine {
         self.catalog
             .add_column(table_name, column_def.clone())
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -230,6 +286,7 @@ impl Engine {
         self.catalog
             .drop_column(table_name, column_name)
             .map_err(|err| anyhow!(err))?;
+        self.persist_catalog()?;
         Ok(ReplOutput::Message("OK".to_string()))
     }
 
@@ -302,6 +359,246 @@ impl Engine {
         let mut executor = Executor::new(root);
         let rows = executor.execute().map_err(|err| anyhow!(err))?;
         Ok(ReplOutput::Rows { schema, rows })
+    }
+
+    fn _persist_catalog(&self, path: &Path) -> Result<()> {
+        #[derive(Serialize)]
+        struct SerializedCatalog {
+            tables: Vec<SerializedTable>,
+        }
+        #[derive(Serialize)]
+        struct SerializedTable {
+            name: String,
+            first_page_id: u64,
+            columns: Vec<SerializedColumn>,
+            indexes: Vec<SerializedIndex>,
+        }
+        #[derive(Serialize)]
+        struct SerializedColumn {
+            name: String,
+            data_type: String,
+            nullable: bool,
+            primary_key: bool,
+            unique: bool,
+            default_value: Option<SerializedDefaultValue>,
+        }
+
+        #[derive(Serialize, Clone)]
+        enum SerializedDefaultValue {
+            Null,
+            Integer(i64),
+            Real(f64),
+            Text(String),
+            Boolean(bool),
+            CurrentTimestamp,
+        }
+
+        impl From<query::DefaultValue> for SerializedDefaultValue {
+            fn from(default: query::DefaultValue) -> Self {
+                match default {
+                    query::DefaultValue::Null => SerializedDefaultValue::Null,
+                    query::DefaultValue::Integer(v) => SerializedDefaultValue::Integer(v),
+                    query::DefaultValue::Real(v) => SerializedDefaultValue::Real(v),
+                    query::DefaultValue::Text(v) => SerializedDefaultValue::Text(v),
+                    query::DefaultValue::Boolean(v) => SerializedDefaultValue::Boolean(v),
+                    query::DefaultValue::CurrentTimestamp => {
+                        SerializedDefaultValue::CurrentTimestamp
+                    }
+                }
+            }
+        }
+
+        #[derive(Serialize)]
+        struct SerializedIndex {
+            name: String,
+            columns: Vec<String>,
+            unique: bool,
+            is_primary: bool,
+        }
+
+        let mut tables = Vec::new();
+        for table in self.catalog.tables() {
+            let columns: Vec<SerializedColumn> = table
+                .columns
+                .iter()
+                .map(|c| SerializedColumn {
+                    name: c.name.clone(),
+                    data_type: format!("{:?}", c.data_type),
+                    nullable: c.nullable,
+                    primary_key: c.primary_key,
+                    unique: c.unique,
+                    default_value: c.default_value.as_ref().map(|v| v.clone().into()),
+                })
+                .collect();
+
+            let first_page_id = table.heap.first_page_id().unwrap_or(None).unwrap_or(0);
+
+            let indexes: Vec<SerializedIndex> = table
+                .indexes
+                .iter()
+                .map(|idx| SerializedIndex {
+                    name: idx.name.clone(),
+                    columns: idx.columns.clone(),
+                    unique: idx.unique,
+                    is_primary: idx.is_primary,
+                })
+                .collect();
+
+            tables.push(SerializedTable {
+                name: table.name.clone(),
+                first_page_id,
+                columns,
+                indexes,
+            });
+        }
+
+        let catalog_data = SerializedCatalog { tables };
+        let file = File::create(path).context("create catalog file")?;
+        serde_json::to_writer_pretty(file, &catalog_data)?;
+        Ok(())
+    }
+
+    fn load_catalog(&mut self, path: &Path) -> Result<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        #[derive(Deserialize)]
+        struct SerializedCatalog {
+            tables: Vec<SerializedTable>,
+        }
+        #[derive(Deserialize)]
+        struct SerializedTable {
+            name: String,
+            first_page_id: u64,
+            columns: Vec<SerializedColumn>,
+            indexes: Vec<SerializedIndex>,
+        }
+        #[derive(Deserialize)]
+        struct SerializedColumn {
+            name: String,
+            data_type: String,
+            nullable: bool,
+            primary_key: bool,
+            unique: bool,
+            default_value: Option<SerializedDefaultValue>,
+        }
+
+        #[derive(Deserialize, Clone)]
+        enum SerializedDefaultValue {
+            Null,
+            Integer(i64),
+            Real(f64),
+            Text(String),
+            Boolean(bool),
+            CurrentTimestamp,
+        }
+
+        impl From<SerializedDefaultValue> for query::DefaultValue {
+            fn from(default: SerializedDefaultValue) -> Self {
+                match default {
+                    SerializedDefaultValue::Null => query::DefaultValue::Null,
+                    SerializedDefaultValue::Integer(v) => query::DefaultValue::Integer(v),
+                    SerializedDefaultValue::Real(v) => query::DefaultValue::Real(v),
+                    SerializedDefaultValue::Text(v) => query::DefaultValue::Text(v),
+                    SerializedDefaultValue::Boolean(v) => query::DefaultValue::Boolean(v),
+                    SerializedDefaultValue::CurrentTimestamp => {
+                        query::DefaultValue::CurrentTimestamp
+                    }
+                }
+            }
+        }
+
+        #[derive(Deserialize)]
+        struct SerializedIndex {
+            name: String,
+            columns: Vec<String>,
+            unique: bool,
+            is_primary: bool,
+        }
+
+        let file = File::open(path).context("open catalog file")?;
+        let catalog_data: SerializedCatalog =
+            serde_json::from_reader(file).context("parse catalog")?;
+
+        for table_data in catalog_data.tables {
+            let columns: Result<Vec<ColumnDef>, _> = table_data
+                .columns
+                .iter()
+                .map(|c| {
+                    let data_type = match c.data_type.as_str() {
+                        "Integer" => DataType::Integer,
+                        "BigInt" => DataType::BigInt,
+                        "Text" => DataType::Text,
+                        "Boolean" => DataType::Boolean,
+                        "Real" => DataType::Real,
+                        "Timestamp" => DataType::Timestamp,
+                        "Blob" => DataType::Blob,
+                        _ => {
+                            return Err(anyhow!(
+                                "unknown data type '{}' for column '{}' in table '{}'",
+                                c.data_type,
+                                c.name,
+                                table_data.name
+                            ));
+                        }
+                    };
+                    Ok(ColumnDef {
+                        name: c.name.clone(),
+                        data_type,
+                        nullable: c.nullable,
+                        primary_key: c.primary_key,
+                        unique: c.unique,
+                        default_value: c.default_value.as_ref().map(|v| (*v).clone().into()),
+                    })
+                })
+                .collect();
+            let columns = columns.context("failed to parse column definitions")?;
+
+            let schema = Schema::new(
+                columns
+                    .iter()
+                    .map(|c| Field {
+                        name: c.name.clone(),
+                        table: Some(table_data.name.clone()),
+                        data_type: c.data_type.clone(),
+                        nullable: c.nullable,
+                        visible: true,
+                    })
+                    .collect(),
+            );
+
+            let heap = TableHeap::load(table_data.first_page_id, self.buffer_pool.clone())
+                .map_err(|e| anyhow!("failed to load table heap: {}", e))?;
+
+            let mut table = TableInfo::with_columns(table_data.name.clone(), schema, columns, heap);
+
+            for idx in &table_data.indexes {
+                let column_names: Vec<&str> = idx.columns.iter().map(|c| c.as_str()).collect();
+                table
+                    .create_composite_index(
+                        idx.name.clone(),
+                        column_names,
+                        idx.unique,
+                        idx.is_primary,
+                    )
+                    .map_err(|e| anyhow!(e))?;
+            }
+
+            self.catalog.register_table_info(table);
+        }
+
+        Ok(())
+    }
+}
+
+impl Drop for Engine {
+    fn drop(&mut self) {
+        use storage::FlushMode;
+        let _ = self.buffer_pool.flush_all_pages_with_mode(FlushMode::Force);
+        if let Err(e) = self.persist_catalog() {
+            eprintln!("WARN: failed to persist catalog: {}", e);
+        }
     }
 }
 
@@ -436,6 +733,7 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.path);
             let _ = fs::remove_file(self.path.with_extension("wal"));
+            let _ = fs::remove_file(self.path.with_extension("catalog"));
         }
     }
 

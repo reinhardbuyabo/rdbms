@@ -2,9 +2,10 @@ use parking_lot::{Condvar, Mutex};
 use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 use thiserror::Error;
 use txn::LockManager;
@@ -36,6 +37,7 @@ pub enum LogRecordType {
     End,
     PageUpdate,
     Compensation,
+    Checkpoint,
 }
 
 impl LogRecordType {
@@ -47,6 +49,7 @@ impl LogRecordType {
             LogRecordType::End => 4,
             LogRecordType::PageUpdate => 5,
             LogRecordType::Compensation => 6,
+            LogRecordType::Checkpoint => 7,
         }
     }
 
@@ -58,6 +61,7 @@ impl LogRecordType {
             4 => Ok(LogRecordType::End),
             5 => Ok(LogRecordType::PageUpdate),
             6 => Ok(LogRecordType::Compensation),
+            7 => Ok(LogRecordType::Checkpoint),
             _ => Err(WalError::Corrupt(format!(
                 "invalid log record type {}",
                 value
@@ -129,6 +133,16 @@ impl LogRecord {
             txn_id,
             prev_lsn,
             record_type: LogRecordType::End,
+            payload: LogPayload::None,
+        }
+    }
+
+    pub fn checkpoint(lsn: Lsn, prev_lsn: Option<Lsn>) -> Self {
+        Self {
+            lsn,
+            txn_id: 0,
+            prev_lsn,
+            record_type: LogRecordType::Checkpoint,
             payload: LogPayload::None,
         }
     }
@@ -222,19 +236,20 @@ impl LogRecord {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> WalResult<Self> {
-        if bytes.len() < 1 + 8 + 8 + 8 {
+        if bytes.len() < 4 + 1 + 8 + 8 + 8 {
             return Err(WalError::Corrupt("log record too small".to_string()));
         }
-        let record_type = LogRecordType::from_byte(bytes[0])?;
-        let lsn = read_u64(&bytes[1..9]);
-        let txn_id = read_u64(&bytes[9..17]);
-        let prev_raw = read_u64(&bytes[17..25]);
+        let _len = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        let record_type = LogRecordType::from_byte(bytes[4])?;
+        let lsn = read_u64(&bytes[5..13]);
+        let txn_id = read_u64(&bytes[13..21]);
+        let prev_raw = read_u64(&bytes[21..29]);
         let prev_lsn = if prev_raw == INVALID_LSN {
             None
         } else {
             Some(prev_raw)
         };
-        let mut offset = 25;
+        let mut offset = 29;
         let payload = match record_type {
             LogRecordType::PageUpdate => {
                 if bytes.len() < offset + 8 + 4 + 4 + 4 {
@@ -538,6 +553,7 @@ pub struct LogManager {
     state: Arc<Mutex<LogState>>,
     condvar: Arc<Condvar>,
     sender: mpsc::Sender<FlushRequest>,
+    path: PathBuf,
 }
 
 struct FlushRequest {
@@ -555,6 +571,7 @@ struct LogState {
     flushing_in_progress: bool,
     buffer_size: usize,
     last_error: Option<WalError>,
+    requested_flush_to: Lsn,
 }
 
 impl LogManager {
@@ -563,13 +580,13 @@ impl LogManager {
     }
 
     pub fn open_with_buffer(path: impl AsRef<Path>, buffer_size: usize) -> WalResult<Self> {
-        let path_ref = path.as_ref();
+        let path_ref = path.as_ref().to_path_buf();
         let mut file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .truncate(false)
-            .open(path_ref)?;
+            .open(&path_ref)?;
         let len = file.metadata()?.len();
         file.seek(SeekFrom::End(0))?;
         let state = Arc::new(Mutex::new(LogState {
@@ -581,6 +598,7 @@ impl LogManager {
             flushing_in_progress: false,
             buffer_size,
             last_error: None,
+            requested_flush_to: len,
         }));
         let condvar = Arc::new(Condvar::new());
         let (sender, receiver) = mpsc::channel();
@@ -604,6 +622,7 @@ impl LogManager {
             state,
             condvar,
             sender,
+            path: path_ref,
         })
     }
 
@@ -627,11 +646,52 @@ impl LogManager {
         if lsn <= state.flushed_lsn {
             return Ok(());
         }
-        if lsn >= state.active_start_lsn {
+        state.requested_flush_to = lsn;
+        if lsn >= state.active_start_lsn && !state.active.is_empty() && !state.flushing_in_progress
+        {
             self.flush_active_locked(&mut state)?;
         }
         while state.flushed_lsn < lsn {
-            self.condvar.wait(&mut state);
+            let flushed_before = state.flushed_lsn;
+            let active_start = state.active_start_lsn;
+            let flushing_in_progress = state.flushing_in_progress;
+            let active_empty = state.active.is_empty();
+            drop(state);
+            std::thread::sleep(Duration::from_millis(2));
+            state = self.state.lock();
+            if state.flushed_lsn >= lsn {
+                return Ok(());
+            }
+            if state.flushed_lsn > flushed_before {
+                continue;
+            }
+            if !flushing_in_progress && active_empty && state.flushed_lsn >= active_start {
+                return Ok(());
+            }
+            if lsn >= state.active_start_lsn
+                && !state.active.is_empty()
+                && !state.flushing_in_progress
+            {
+                self.flush_active_locked(&mut state)?;
+            }
+            state.ensure_ok()?;
+            self.condvar
+                .wait_for(&mut state, Duration::from_millis(200));
+            state.ensure_ok()?;
+        }
+        Ok(())
+    }
+
+    pub fn force_flush(&self) -> WalResult<()> {
+        let mut state = self.state.lock();
+        state.ensure_ok()?;
+        if !state.active.is_empty() && !state.flushing_in_progress {
+            self.flush_active_locked(&mut state)?;
+        }
+        while state.flushing_in_progress || !state.active.is_empty() {
+            state.ensure_ok()?;
+            self.condvar
+                .wait_for(&mut state, Duration::from_millis(200));
             state.ensure_ok()?;
         }
         Ok(())
@@ -671,6 +731,43 @@ impl LogManager {
             })
             .map_err(|_| WalError::ChannelClosed)?;
         Ok(())
+    }
+
+    pub fn checkpoint(&self) -> WalResult<Lsn> {
+        self.force_flush()?;
+        let lsn = self.append(LogRecord::checkpoint(self.state.lock().next_lsn, None))?;
+        self.flush(lsn)?;
+        Ok(lsn)
+    }
+
+    pub fn truncate(&self, up_to_lsn: Lsn) -> WalResult<()> {
+        let mut state = self.state.lock();
+        state.active_start_lsn = up_to_lsn;
+        if !state.active.is_empty() {
+            state.active.clear();
+        }
+        drop(state);
+
+        if up_to_lsn > 0 {
+            let file = OpenOptions::new()
+                .write(true)
+                .truncate(false)
+                .open(&self.path)?;
+            file.set_len(up_to_lsn)?;
+        } else {
+            let file = OpenOptions::new()
+                .write(true)
+                .truncate(false)
+                .create(true)
+                .open(&self.path)?;
+            file.set_len(0)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn active_start_lsn(&self) -> Lsn {
+        self.state.lock().active_start_lsn
     }
 }
 
@@ -713,10 +810,11 @@ impl LogReader {
         if len < 4 {
             return Err(WalError::Corrupt("invalid log record length".to_string()));
         }
-        let mut payload = vec![0u8; len - 4];
-        self.file.read_exact(&mut payload)?;
+        let mut full_record = vec![0u8; len];
+        full_record[0..4].copy_from_slice(&len_bytes);
+        self.file.read_exact(&mut full_record[4..])?;
         self.offset += len as u64;
-        let record = LogRecord::from_bytes(&payload)?;
+        let record = LogRecord::from_bytes(&full_record)?;
         Ok(Some(record))
     }
 }

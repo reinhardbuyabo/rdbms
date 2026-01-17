@@ -198,6 +198,10 @@ impl TableHeap {
         Ok(heap)
     }
 
+    pub fn load(first_page_id: PageId, buffer_pool: BufferPoolManager) -> ExecutionResult<Self> {
+        Ok(Self::new(buffer_pool, Some(first_page_id)))
+    }
+
     pub fn buffer_pool(&self) -> &BufferPoolManager {
         &self.buffer_pool
     }
@@ -611,7 +615,21 @@ fn write_bytes_logged(page: &mut Page, offset: usize, bytes: &[u8]) -> Execution
         ));
     }
     if let Some(lsn) = lsn {
-        if lsn > page.lsn() {
+        let current_page_lsn = page.lsn();
+        if cfg!(debug_assertions) {
+            eprintln!(
+                "DEBUG: page_id={}, write_lsn={}, current_page_lsn={}, lsn_comparison={}",
+                page_id,
+                lsn,
+                current_page_lsn,
+                if lsn > current_page_lsn {
+                    "GREATER"
+                } else {
+                    "NOT_GREATER"
+                }
+            );
+        }
+        if lsn > current_page_lsn {
             page.set_lsn(lsn);
         }
     }

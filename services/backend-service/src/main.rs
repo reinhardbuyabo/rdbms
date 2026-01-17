@@ -1,11 +1,14 @@
 use actix_cors::Cors;
 use actix_web::{middleware, web, App, HttpServer};
 use anyhow::{Context, Result as AnyhowResult};
+use clap::Parser;
 use db::engine::Engine;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use wal::Transaction;
 
 mod handlers;
 mod models;
@@ -15,25 +18,54 @@ use handlers::*;
 #[derive(Clone)]
 pub struct AppState {
     engine: Arc<Mutex<Engine>>,
-    transactions: Arc<Mutex<HashMap<String, Arc<Mutex<Engine>>>>>,
+    transactions: Arc<Mutex<HashMap<String, Arc<Mutex<Transaction>>>>>,
+}
+
+#[derive(Parser, Debug)]
+#[command(name = "backend-service")]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Database file path
+    #[arg(short, long, default_value = "./data.db")]
+    db: PathBuf,
+
+    /// Port to listen on
+    #[arg(short, long, default_value = "8080")]
+    port: u16,
+
+    /// Bind address (for TCP socket binding)
+    #[arg(long, default_value = "0.0.0.0")]
+    bind: String,
 }
 
 #[actix_web::main]
 async fn main() -> AnyhowResult<()> {
     env_logger::init();
 
-    let db_path: PathBuf = env::var("DB_PATH")
-        .unwrap_or_else(|_| "./data.db".to_string())
-        .into();
+    let args = Args::parse();
 
-    let port = env::var("PORT")
-        .unwrap_or_else(|_| "8080".to_string())
-        .parse()
-        .context("Invalid PORT value")?;
+    // Allow environment variables to override CLI args
+    let db_path: PathBuf = if let Ok(path) = env::var("DB_PATH") {
+        path.into()
+    } else {
+        args.db
+    };
 
-    println!("Starting Actix DB Service");
+    let port = if let Ok(port_str) = env::var("PORT") {
+        port_str.parse().context("Invalid PORT value")?
+    } else {
+        args.port
+    };
+
+    let bind = if let Ok(bind) = env::var("BIND") {
+        bind
+    } else {
+        args.bind
+    };
+
+    println!("Starting RDBMS Backend Service");
     println!("Database path: {:?}", db_path);
-    println!("Port: {}", port);
+    println!("Listening on: {}:{}", bind, port);
 
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).context("create db directory")?;
@@ -47,6 +79,8 @@ async fn main() -> AnyhowResult<()> {
         engine,
         transactions: Arc::new(Mutex::new(HashMap::new())),
     };
+
+    let bind_addr = format!("{}:{}", bind, port);
 
     HttpServer::new(move || {
         let cors = Cors::default()
@@ -68,7 +102,7 @@ async fn main() -> AnyhowResult<()> {
                     .route("/tx/{tx_id}/abort", web::post().to(abort_transaction)),
             )
     })
-    .bind(("0.0.0.0", port))
+    .bind(&bind_addr)
     .context("Failed to bind server")?
     .run()
     .await
