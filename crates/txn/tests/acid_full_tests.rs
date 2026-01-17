@@ -120,8 +120,9 @@ mod atomicity_tests {
         let lock_manager1 = Arc::clone(&lock_manager);
         let handle = thread::spawn(move || {
             barrier_clone.wait();
-            let _ = started_clone.store(true, std::sync::atomic::Ordering::SeqCst);
             let result = lock_manager1.lock_exclusive(TxnId(1), key.clone());
+            let _ = started_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            barrier_clone.wait();
             result
         });
 
@@ -135,17 +136,18 @@ mod atomicity_tests {
 
         assert!(
             started.load(std::sync::atomic::Ordering::SeqCst),
-            "Second transaction should have attempted lock"
+            "First transaction should have acquired the lock"
         );
+
+        barrier.wait();
         lock_manager.unlock_all(TxnId(1));
 
         let result2 = handle.join().unwrap();
         assert!(
             result2.is_ok(),
-            "First lock should be released, second transaction can acquire"
+            "First transaction should have successfully acquired the lock"
         );
 
-        lock_manager.unlock_all(TxnId(1));
         lock_manager.unlock_all(TxnId(2));
     }
 }
@@ -418,6 +420,9 @@ mod durability_tests {
         while let Some(_) = reader.next_record().expect("Read error") {
             count += 1;
         }
-        assert!(count >= 1, "At least 1 record should be durable");
+        assert_eq!(
+            count, 3,
+            "All 3 appended LogRecord::begin entries should be durable"
+        );
     }
 }

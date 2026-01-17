@@ -21,8 +21,8 @@ A lightweight embedded RDBMS with full ACID transaction support, written in Rust
 
 ```bash
 # Download the latest release for your platform
-curl -L https://github.com/reinhardbuyabo/rdbms/releases/latest/download/rdbms-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf rdbms-v0.3.0-x86_64-unknown-linux-gnu.tar.gz
+curl -L https://github.com/reinhardbuyabo/rdbms/releases/latest/download/rdbms-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
+tar -xzf rdbms-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
 ./rdbms --help
 ```
 
@@ -122,7 +122,7 @@ DROP TABLE users;
 
 ```bash
 $ make run-repl DB_PATH=/tmp/mydb.db
-RDBMS REPL v0.3.0
+RDBMS REPL v0.4.0
 Using database file: /tmp/mydb.db
 
 > CREATE TABLE users (id INT PRIMARY KEY, name TEXT);
@@ -677,6 +677,7 @@ make docker-build && make docker-run
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v0.4.0 | Jan 2026 | Transaction APIs, Catalog persistence, REST API, ORDER BY support |
 | v0.3.0 | Jan 2026 | ACID transactions, Lock Manager, WAL, Schema persistence |
 | v0.2.0 | Jan 2026 | Query engine, B+Tree indexes |
 | v0.1.0 | Jan 2026 | Initial release, basic CRUD |

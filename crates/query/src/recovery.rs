@@ -189,8 +189,10 @@ impl RecoveryManager {
             let record = match records.get(&lsn) {
                 Some(rec) => rec.clone(),
                 None => {
-                    eprintln!("WARN: missing log record at lsn={}, skipping undo", lsn);
-                    break;
+                    return Err(ExecutionError::Execution(format!(
+                        "missing log record at lsn={}",
+                        lsn
+                    )));
                 }
             };
             current_lsn = match &record.payload {

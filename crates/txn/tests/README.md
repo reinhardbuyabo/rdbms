@@ -168,9 +168,9 @@ cargo test -p txn --test transaction_core_tests -- test_single_transaction_commi
 
 ## 📚 Resources
 
-- [Transaction Refactoring Plan](../docs/TRANSACTION_REFACTORING_PLAN.md)
+- [Transaction Refactoring Plan](../../../docs/TRANSACTION_REFACTORING_PLAN.md)
 - [Test Suite Documentation](./transaction_core_tests.rs)
-- [Original Bug Report](../docs/TRANSACTION_ROLLBACK_BUG.md)
+- [Original Bug Report](../../../docs/TRANSACTION_ROLLBACK_BUG.md)
 
 ## 🤝 Contributing
 

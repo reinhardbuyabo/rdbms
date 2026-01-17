@@ -522,12 +522,11 @@ impl Engine {
             serde_json::from_reader(file).context("parse catalog")?;
 
         for table_data in catalog_data.tables {
-            let columns: Vec<ColumnDef> = table_data
+            let columns: Result<Vec<ColumnDef>, _> = table_data
                 .columns
                 .iter()
-                .map(|c| ColumnDef {
-                    name: c.name.clone(),
-                    data_type: match c.data_type.as_str() {
+                .map(|c| {
+                    let data_type = match c.data_type.as_str() {
                         "Integer" => DataType::Integer,
                         "BigInt" => DataType::BigInt,
                         "Text" => DataType::Text,
@@ -535,14 +534,26 @@ impl Engine {
                         "Real" => DataType::Real,
                         "Timestamp" => DataType::Timestamp,
                         "Blob" => DataType::Blob,
-                        _ => DataType::Text,
-                    },
-                    nullable: c.nullable,
-                    primary_key: c.primary_key,
-                    unique: c.unique,
-                    default_value: c.default_value.as_ref().map(|v| (*v).clone().into()),
+                        _ => {
+                            return Err(anyhow!(
+                                "unknown data type '{}' for column '{}' in table '{}'",
+                                c.data_type,
+                                c.name,
+                                table_data.name
+                            ));
+                        }
+                    };
+                    Ok(ColumnDef {
+                        name: c.name.clone(),
+                        data_type,
+                        nullable: c.nullable,
+                        primary_key: c.primary_key,
+                        unique: c.unique,
+                        default_value: c.default_value.as_ref().map(|v| (*v).clone().into()),
+                    })
                 })
                 .collect();
+            let columns = columns.context("failed to parse column definitions")?;
 
             let schema = Schema::new(
                 columns
@@ -563,10 +574,11 @@ impl Engine {
             let mut table = TableInfo::with_columns(table_data.name.clone(), schema, columns, heap);
 
             for idx in &table_data.indexes {
+                let column_names: Vec<&str> = idx.columns.iter().map(|c| c.as_str()).collect();
                 table
-                    .create_index(
+                    .create_composite_index(
                         idx.name.clone(),
-                        &idx.columns[0],
+                        column_names,
                         idx.unique,
                         idx.is_primary,
                     )

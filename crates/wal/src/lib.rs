@@ -751,13 +751,13 @@ impl LogManager {
         if up_to_lsn > 0 {
             let file = OpenOptions::new()
                 .write(true)
-                .truncate(true)
+                .truncate(false)
                 .open(&self.path)?;
             file.set_len(up_to_lsn)?;
         } else {
             let file = OpenOptions::new()
                 .write(true)
-                .truncate(true)
+                .truncate(false)
                 .create(true)
                 .open(&self.path)?;
             file.set_len(0)?;

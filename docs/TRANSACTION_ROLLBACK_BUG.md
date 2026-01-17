@@ -136,7 +136,7 @@ The transaction appears to be committed successfully at the engine level, but **
 
 ## 📋 Steps to Reproduce
 
-1. Start API service: `cargo run -p api`
+1. Start backend-service: `cargo run -p backend-service`
 2. Create table: Works fine
 3. Insert any data: Fails with "rollback transaction"
 4. OR Start REPL: `cargo run --bin rdbms -- --db ./test.db`

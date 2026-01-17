@@ -49,9 +49,9 @@ USER app
 # 8080 - REST API (backend-service)
 EXPOSE 5432 8080
 
-# Health check for TCP server
+# Health check based on SERVICE mode
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD nc -z localhost 5432 || exit 1
+    CMD sh -c 'if [ "$SERVICE" = "api" ]; then curl -f http://localhost:8080/api/health || exit 1; else nc -z localhost 5432 || exit 1; fi'
 
 # Entrypoint handles both server modes
 COPY --chmod=755 <<'EOF' /entrypoint.sh

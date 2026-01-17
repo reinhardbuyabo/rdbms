@@ -19,8 +19,8 @@ ConfigurationDirectory=rdbms
 ConfigurationDirectoryMode=0755
 
 ExecStart=/usr/local/bin/rdbmsd \
-    --db ${DB_PATH:-/var/lib/rdbms/database.db} \
-    --listen ${LISTEN:-0.0.0.0:5432}
+    --db $DB_PATH \
+    --listen $LISTEN
 
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed

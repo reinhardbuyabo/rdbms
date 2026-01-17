@@ -5,6 +5,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 BIN_DIR="${INSTALL_PREFIX}/bin"
@@ -12,18 +13,21 @@ CONFIG_DIR="${CONFIG_DIR:-/etc/rdbms}"
 
 echo "=== RDBMS Installation Script ==="
 echo "Install prefix: $INSTALL_PREFIX"
+echo "Repository root: $REPO_ROOT"
 
 # Check if running as root
 if [ "$(id -u)" -ne 0 ]; then
-    echo "Warning: Not running as root. Some operations may require sudo."
+    echo "Error: This script must be run as root."
+    echo "Please run with: sudo $0"
+    exit 1
 fi
 
 # Step 1: Build if needed
 echo ""
 echo "Step 1: Building RDBMS..."
-if [ ! -f "$SCRIPT_DIR/../target/release/rdbmsd" ]; then
+if [ ! -f "$REPO_ROOT/target/release/rdbmsd" ]; then
     echo "Building release binaries..."
-    cd "$SCRIPT_DIR/.."
+    cd "$REPO_ROOT"
     cargo build --release -p db --features tcp-server
     cd "$SCRIPT_DIR"
 else
@@ -33,18 +37,14 @@ fi
 # Step 2: Setup users and groups
 echo ""
 echo "Step 2: Setting up users and groups..."
-if [ "$(id -u)" -eq 0 ]; then
-    chmod +x "$SCRIPT_DIR/setup-users.sh"
-    "$SCRIPT_DIR/setup-users.sh"
-else
-    echo "Skipping (run as root to setup users)"
-fi
+chmod +x "$SCRIPT_DIR/setup-users.sh"
+"$SCRIPT_DIR/setup-users.sh"
 
 # Step 3: Install binary
 echo ""
 echo "Step 3: Installing binary..."
 mkdir -p "$BIN_DIR"
-cp "$SCRIPT_DIR/../target/release/rdbmsd" "$BIN_DIR/"
+cp "$REPO_ROOT/target/release/rdbmsd" "$BIN_DIR/"
 chmod 755 "$BIN_DIR/rdbmsd"
 echo "Installed to: $BIN_DIR/rdbmsd"
 
@@ -60,26 +60,16 @@ chmod 755 /var/lib/rdbms /run/rdbms /var/log/rdbms /etc/rdbms
 # Step 5: Install systemd unit
 echo ""
 echo "Step 5: Installing systemd unit..."
-if [ "$(id -u)" -eq 0 ]; then
-    cp "$SCRIPT_DIR/rdbms.service" "$SYSTEMD_DIR/"
-    chmod 644 "$SYSTEMD_DIR/rdbms.service"
-    systemctl daemon-reload
-    echo "Systemd unit installed to: $SYSTEMD_DIR/rdbms.service"
-else
-    echo "Skipping (run as root to install systemd unit)"
-    echo "Manual installation:"
-    echo "  sudo cp $SCRIPT_DIR/rdbms.service /etc/systemd/system/"
-fi
+cp "$SCRIPT_DIR/rdbms.service" "$SYSTEMD_DIR/"
+chmod 644 "$SYSTEMD_DIR/rdbms.service"
+systemctl daemon-reload
+echo "Systemd unit installed to: $SYSTEMD_DIR/rdbms.service"
 
 # Step 6: Set permissions
 echo ""
 echo "Step 6: Setting permissions..."
-if [ "$(id -u)" -eq 0 ]; then
-    chown -R rdbms:rdbms /var/lib/rdbms /run/rdbms /var/log/rdbms 2>/dev/null || true
-    echo "Permissions set."
-else
-    echo "Skipping (run as root to set permissions)"
-fi
+chown -R rdbms:rdbms /var/lib/rdbms /run/rdbms /var/log/rdbms 2>/dev/null || true
+echo "Permissions set."
 
 echo ""
 echo "=== Installation Complete ==="
