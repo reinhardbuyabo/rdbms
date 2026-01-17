@@ -110,29 +110,39 @@ mod atomicity_tests {
             Duration::from_millis(500),
         )));
         let key = LockKey::Page(1);
+        let key_for_thread2 = key.clone();
 
         let barrier = Arc::new(Barrier::new(2));
         let barrier_clone = barrier.clone();
-        let key_clone = key.clone();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started_clone = started.clone();
 
         let lock_manager1 = Arc::clone(&lock_manager);
         let handle = thread::spawn(move || {
             barrier_clone.wait();
-            let result = lock_manager1.lock_exclusive(TxnId(1), key_clone);
+            let _ = started_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            let result = lock_manager1.lock_exclusive(TxnId(1), key.clone());
             result
         });
 
         barrier.wait();
-        let result1 = lock_manager.lock_exclusive(TxnId(2), key.clone());
+        let result1 = lock_manager.lock_exclusive(TxnId(2), key_for_thread2);
+
         assert!(
-            result1.is_err() || result1.is_ok(),
-            "Lock attempt should complete"
+            result1.is_err(),
+            "Second lock attempt should fail (first transaction holds lock)"
         );
+
+        assert!(
+            started.load(std::sync::atomic::Ordering::SeqCst),
+            "Second transaction should have attempted lock"
+        );
+        lock_manager.unlock_all(TxnId(1));
 
         let result2 = handle.join().unwrap();
         assert!(
             result2.is_ok(),
-            "Second lock attempt should succeed after first releases"
+            "First lock should be released, second transaction can acquire"
         );
 
         lock_manager.unlock_all(TxnId(1));
