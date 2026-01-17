@@ -155,6 +155,103 @@ The backend-service provides a REST API for integration with frontend applicatio
 | POST | /api/tx/begin | Begin transaction |
 | POST | /api/tx/{id}/commit | Commit transaction |
 | POST | /api/tx/{id}/abort | Abort transaction |
+| GET | /auth/google/start | Start Google OAuth flow |
+| GET | /auth/google/callback | OAuth callback handler |
+| GET | /me | Get current user profile (requires JWT) |
+
+#### Google OAuth Authentication
+
+The backend-service supports Google OAuth 2.0 authentication for securing API endpoints.
+
+**Configuration (Environment Variables):**
+
+```bash
+# Required for Google OAuth
+export GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
+export GOOGLE_CLIENT_SECRET="your-google-client-secret"
+export GOOGLE_REDIRECT_URI="http://localhost:8080/auth/google/callback"
+
+# Required for JWT
+export JWT_SECRET="your-super-secret-key-change-in-production"
+export JWT_TTL_SECONDS="3600"  # Token expiration time
+```
+
+**Setup Steps:**
+
+1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable the Google OAuth 2.0 API
+3. Create OAuth 2.0 credentials (Web application type)
+4. Add authorized redirect URI: `http://localhost:8080/auth/google/callback`
+5. Copy the Client ID and Client Secret
+
+**OAuth Flow (Authorization Code Flow):**
+
+```bash
+# Step 1: Redirect user to Google
+# Visit: http://localhost:8080/auth/google/start
+# User will be redirected to Google for authentication
+
+# Step 2: After successful auth, Google redirects to:
+# http://localhost:8080/auth/google/callback?code=AUTHORIZATION_CODE
+
+# Step 3: Server exchanges code for tokens, creates/updates user, returns JWT
+# Response:
+# {
+#   "token": "eyJhbGciOiJIUzI1NiIs...",
+#   "user": {
+#     "id": 1,
+#     "google_sub": "123456789",
+#     "email": "user@gmail.com",
+#     "name": "User Name",
+#     "avatar_url": "https://...",
+#     "created_at": "2024-01-01T00:00:00Z",
+#     "updated_at": "2024-01-01T00:00:00Z"
+#   }
+# }
+
+# Step 4: Use JWT to access protected endpoints
+curl http://localhost:8080/me \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+**Users Table Schema:**
+
+The backend automatically creates a `users` table on first OAuth login:
+
+```sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    google_sub TEXT UNIQUE NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT,
+    avatar_url TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+```
+
+**Example with curl:**
+
+```bash
+# Start OAuth flow (get redirect URL)
+curl http://localhost:8080/auth/google/start
+
+# After Google redirect with code, get token and user info
+# (browser handles this automatically in web app)
+
+# Access protected endpoint
+curl http://localhost:8080/me \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+
+# Response (401 without valid token):
+# {"error":"AUTH_REQUIRED","message":"Authorization header with Bearer token required"}
+
+# Response (401 with invalid token):
+# {"error":"INVALID_TOKEN","message":"Invalid token: ..."}
+
+# Success response:
+# {"user":{"id":1,"google_sub":"...","email":"...","name":"...","avatar_url":"...","created_at":"...","updated_at":"..."}}
+```
 
 **Example with curl:**
 

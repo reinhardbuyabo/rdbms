@@ -14,10 +14,18 @@ anyhow = "1.0"
 uuid = { version = "1.0", features = ["v4"] }
 db = { path = "../../crates/db" }
 wal = { path = "../../crates/wal" }
+query = { path = "../../crates/query" }
 parking_lot = "0.12"
 env_logger = "0.11"
 log = "0.4"
 clap = { version = "4", features = ["derive"] }
+jsonwebtoken = "9"
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+url = "2.5"
+urlencoding = "2.1"
+base64 = "0.21"
+serde_with = "3.8"
 
 [dev-dependencies]
 actix-rt = "2"
