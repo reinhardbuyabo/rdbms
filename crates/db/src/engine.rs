@@ -486,6 +486,7 @@ impl Engine {
             primary_key: bool,
             unique: bool,
             default_value: Option<SerializedDefaultValue>,
+            #[serde(default)]
             auto_increment: bool,
         }
 

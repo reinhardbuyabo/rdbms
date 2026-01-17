@@ -85,6 +85,7 @@ fn catalog_add_column_appends() {
                 primary_key: false,
                 unique: false,
                 default_value: None,
+                auto_increment: false,
             },
         )
         .unwrap();
