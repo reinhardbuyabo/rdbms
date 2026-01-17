@@ -322,7 +322,7 @@ impl Engine {
                     continue;
                 }
                 if values[idx].is_null() && !field.nullable {
-                    let column_def = table.columns.get(idx);
+                    let column_def = table.columns.iter().find(|c| c.name == field.name);
                     if column_def.map(|c| c.auto_increment).unwrap_or(false) {
                         continue;
                     }

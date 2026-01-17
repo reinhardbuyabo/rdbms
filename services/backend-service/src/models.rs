@@ -44,7 +44,7 @@ pub enum UserRole {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "status")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventStatus {
     DRAFT,
     PUBLISHED,
@@ -52,7 +52,7 @@ pub enum EventStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "status")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum OrderStatus {
     PENDING,
     PAID,
@@ -60,7 +60,7 @@ pub enum OrderStatus {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "status")]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TicketStatus {
     HELD,
     ISSUED,

@@ -1,12 +1,14 @@
-use actix_web::{test, web, App};
+use actix_web::{App, test, web};
 use chrono::Utc;
 use db::engine::Engine;
+use db::printer::ReplOutput;
 use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile;
 
+use backend_service::AppState;
 use backend_service::auth::update_role;
 use backend_service::handlers::{
     confirm_order, create_event, create_order, create_ticket_type, delete_event,
@@ -14,7 +16,6 @@ use backend_service::handlers::{
     list_tickets, publish_event, update_event, update_ticket_type,
 };
 use backend_service::jwt::JwtService;
-use backend_service::AppState;
 
 fn create_test_app_state() -> (AppState, tempfile::TempDir) {
     let temp_dir = tempfile::Builder::new().prefix("test").tempdir().unwrap();
@@ -90,6 +91,57 @@ async fn create_test_user(app_state: &AppState, user_id: i64, email: &str, role:
         )
     "#;
     let _ = engine.execute_sql(events_sql);
+}
+
+async fn create_test_event(app_state: &AppState, user_id: i64, title: &str) -> i64 {
+    let mut engine = app_state.engine.lock();
+
+    let events_sql = r#"
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            organizer_user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            venue TEXT,
+            location TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            status TEXT DEFAULT 'DRAFT',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (organizer_user_id) REFERENCES users(id)
+        )
+    "#;
+    let _ = engine.execute_sql(events_sql);
+
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let insert_sql = format!(
+        "INSERT INTO events (organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at) VALUES ({}, '{}', NULL, NULL, NULL, '2025-12-01 10:00:00', '2025-12-01 18:00:00', 'DRAFT', '{}', '{}')",
+        user_id, title, now, now
+    );
+    let _ = engine.execute_sql(&insert_sql);
+
+    let select_sql = format!(
+        "SELECT id FROM events WHERE organizer_user_id = {}",
+        user_id
+    );
+
+    let mut max_id = 0i64;
+    match engine.execute_sql(&select_sql) {
+        Ok(ReplOutput::Rows { mut rows, .. }) => {
+            for row in rows.drain(..) {
+                if let Ok(id) = row.values()[0].as_i64() {
+                    if id > max_id {
+                        max_id = id;
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
+    max_id
 }
 
 #[actix_rt::test]
@@ -255,10 +307,11 @@ async fn test_delete_event_ownership() {
     create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
-    let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
-        "/v1/orders/{order_id}/confirm",
-        web::post().to(confirm_order),
-    ))
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(app_state))
+            .route("/v1/events/{event_id}", web::delete().to(delete_event)),
+    )
     .await;
 
     let req = test::TestRequest::delete()
@@ -639,6 +692,9 @@ async fn test_capacity_validation_zero_capacity() {
     create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
+    let event_id = create_test_event(&app_state, 1, "Test Event").await;
+    assert!(event_id > 0, "Should create a test event");
+
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
         "/v1/events/{event_id}/ticket-types",
         web::post().to(create_ticket_type),
@@ -646,7 +702,7 @@ async fn test_capacity_validation_zero_capacity() {
     .await;
 
     let req = test::TestRequest::post()
-        .uri("/v1/events/999/ticket-types")
+        .uri(&*format!("/v1/events/{}/ticket-types", event_id))
         .insert_header(("Authorization", format!("Bearer {}", jwt_token)))
         .set_json(json!({
             "name": "Regular",
