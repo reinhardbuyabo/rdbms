@@ -88,7 +88,7 @@ mod lock_manager_tests {
         let result3 = handle3.join().unwrap();
         assert!(result3.is_ok());
 
-        handle1.join().unwrap();
+        let _ = handle1.join().unwrap();
     }
 
     #[test]
@@ -133,7 +133,7 @@ mod lock_manager_tests {
         let result3 = handle3.join().unwrap();
         assert!(result3.is_ok());
 
-        handle1.join().unwrap();
+        let _ = handle1.join().unwrap();
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod lock_manager_tests {
         assert!(result2.is_ok());
         assert!(result3.is_ok());
 
-        handle1.join().unwrap();
+        let _ = handle1.join().unwrap();
     }
 
     #[test]
@@ -403,6 +403,6 @@ mod transaction_integration_tests {
         let result3 = handle3.join().unwrap();
         assert!(result3.is_ok(), "T2 should succeed after T1 releases");
 
-        handle1.join().unwrap();
+        let _ = handle1.join().unwrap();
     }
 }
