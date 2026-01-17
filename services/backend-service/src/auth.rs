@@ -324,7 +324,13 @@ async fn upsert_user(data: &AppState, google_user: &GoogleUserInfo) -> anyhow::R
 
 pub async fn load_user_by_id(data: &AppState, user_id: i64) -> anyhow::Result<User> {
     let mut engine = data.engine.lock();
+    load_user_by_id_locked(&mut engine, user_id)
+}
 
+pub fn load_user_by_id_locked(
+    engine: &mut db::engine::Engine,
+    user_id: i64,
+) -> anyhow::Result<User> {
     let sql = format!(
         "SELECT id, google_sub, email, name, avatar_url, role, phone, created_at, updated_at FROM users WHERE id = {}",
         user_id
@@ -489,7 +495,7 @@ async fn update_user_role(data: &AppState, user_id: i64, role: UserRole) -> anyh
 
     engine.execute_sql(&update_sql)?;
 
-    load_user_by_id(data, user_id).await
+    load_user_by_id_locked(&mut engine, user_id)
 }
 
 async fn update_user_profile(
@@ -518,7 +524,7 @@ async fn update_user_profile(
 
     engine.execute_sql(&update_sql)?;
 
-    load_user_by_id(data, user_id).await
+    load_user_by_id_locked(&mut engine, user_id)
 }
 
 fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {

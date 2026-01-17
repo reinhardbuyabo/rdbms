@@ -1,5 +1,5 @@
-use actix_web::{error::InternalError, web, HttpRequest, HttpResponse, Result};
-use anyhow::{anyhow, Context};
+use actix_web::{HttpRequest, HttpResponse, Result, error::InternalError, web};
+use anyhow::{Context, anyhow};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde_json::json;
 use std::collections::HashMap;
@@ -305,6 +305,13 @@ fn check_organizer_role(user: &User) -> Result<()> {
 
 async fn load_event_by_id(data: &AppState, event_id: i64) -> Result<Event, String> {
     let mut engine = data.engine.lock();
+    load_event_by_id_locked(&mut engine, event_id)
+}
+
+fn load_event_by_id_locked(
+    engine: &mut db::engine::Engine,
+    event_id: i64,
+) -> Result<Event, String> {
     let sql = format!(
         "SELECT id, organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at FROM events WHERE id = {}",
         event_id
@@ -372,6 +379,13 @@ async fn load_ticket_type_by_id(
     ticket_type_id: i64,
 ) -> Result<TicketType, String> {
     let mut engine = data.engine.lock();
+    load_ticket_type_by_id_locked(&mut engine, ticket_type_id)
+}
+
+fn load_ticket_type_by_id_locked(
+    engine: &mut db::engine::Engine,
+    ticket_type_id: i64,
+) -> Result<TicketType, String> {
     let sql = format!(
         "SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types WHERE id = {}",
         ticket_type_id
@@ -427,6 +441,13 @@ fn load_ticket_type_by_db_row(row: &query::Tuple) -> anyhow::Result<TicketType> 
 
 async fn load_order_by_id(data: &AppState, order_id: i64) -> Result<Order, String> {
     let mut engine = data.engine.lock();
+    load_order_by_id_locked(&mut engine, order_id)
+}
+
+fn load_order_by_id_locked(
+    engine: &mut db::engine::Engine,
+    order_id: i64,
+) -> Result<Order, String> {
     let sql = format!(
         "SELECT id, customer_user_id, status, total_amount, created_at, updated_at FROM orders WHERE id = {}",
         order_id
@@ -776,7 +797,7 @@ pub async fn update_event(
 
     match engine.execute_sql(&sql) {
         Ok(_) => {
-            match load_event_by_id(&data, event_id).await {
+            match load_event_by_id_locked(&mut engine, event_id) {
                 Ok(updated_event) => Ok(HttpResponse::Ok().json(json!({"event": updated_event, "message": "Event updated successfully"}))),
                 Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "UPDATE_ERROR", "message": format!("Failed to reload event: {}", e)}))),
             }
@@ -861,7 +882,7 @@ pub async fn publish_event(
 
     match engine.execute_sql(&sql) {
         Ok(_) => {
-            match load_event_by_id(&data, event_id).await {
+            match load_event_by_id_locked(&mut engine, event_id) {
                 Ok(updated_event) => Ok(HttpResponse::Ok().json(json!({"event": updated_event, "message": "Event published successfully"}))),
                 Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "PUBLISH_ERROR", "message": format!("Failed to reload event: {}", e)}))),
             }
@@ -1068,7 +1089,7 @@ pub async fn update_ticket_type(
 
     match engine.execute_sql(&sql) {
         Ok(_) => {
-            match load_ticket_type_by_id(&data, ticket_type_id).await {
+            match load_ticket_type_by_id_locked(&mut engine, ticket_type_id) {
                 Ok(updated_tt) => Ok(HttpResponse::Ok().json(json!({"ticket_type": updated_tt, "message": "Ticket type updated successfully"}))),
                 Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "UPDATE_ERROR", "message": format!("Failed to reload ticket type: {}", e)}))),
             }
@@ -1141,6 +1162,13 @@ async fn get_tickets_sold_for_ticket_type(
     ticket_type_id: i64,
 ) -> Result<i64, String> {
     let mut engine = data.engine.lock();
+    get_tickets_sold_for_ticket_type_locked(&mut engine, ticket_type_id)
+}
+
+fn get_tickets_sold_for_ticket_type_locked(
+    engine: &mut db::engine::Engine,
+    ticket_type_id: i64,
+) -> Result<i64, String> {
     let sql = format!(
         "SELECT COUNT(*) FROM tickets WHERE ticket_type_id = {} AND status IN ('HELD', 'ISSUED')",
         ticket_type_id
@@ -1185,13 +1213,13 @@ pub async fn create_order(
             ));
         }
 
-        let ticket_type = match load_ticket_type_by_id(&data, item.ticket_type_id).await {
+        let ticket_type = match load_ticket_type_by_id_locked(&mut engine, item.ticket_type_id) {
             Ok(tt) => tt,
             Err(_) => return Ok(HttpResponse::NotFound().json(json!({"error": "TICKET_TYPE_NOT_FOUND", "message": format!("Ticket type {} not found", item.ticket_type_id)}))),
         };
 
         let event =
-            match load_event_by_id(&data, ticket_type.event_id).await {
+            match load_event_by_id_locked(&mut engine, ticket_type.event_id) {
                 Ok(e) => e,
                 Err(_) => return Ok(HttpResponse::InternalServerError().json(
                     json!({"error": "EVENT_ERROR", "message": "Event not found for ticket type"}),
@@ -1212,7 +1240,7 @@ pub async fn create_order(
             EventStatus::PUBLISHED => {}
         }
 
-        let sold = match get_tickets_sold_for_ticket_type(&data, item.ticket_type_id).await {
+        let sold = match get_tickets_sold_for_ticket_type_locked(&mut engine, item.ticket_type_id) {
             Ok(s) => s,
             Err(e) => return Ok(HttpResponse::InternalServerError().json(json!({"error": "QUERY_ERROR", "message": format!("Failed to check availability: {}", e)}))),
         };
@@ -1323,7 +1351,7 @@ pub async fn confirm_order(
     match engine.execute_sql(&sql) {
         Ok(_) => {
             let _ = engine.execute_sql(&update_tickets_sql);
-            match load_order_by_id(&data, order_id).await {
+            match load_order_by_id_locked(&mut engine, order_id) {
                 Ok(updated_order) => Ok(HttpResponse::Ok().json(json!({"order": updated_order, "message": "Order confirmed and payment received"}))),
                 Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "CONFIRM_ERROR", "message": format!("Failed to reload order: {}", e)}))),
             }
@@ -1351,15 +1379,17 @@ pub async fn list_orders(data: web::Data<AppState>, req_http: HttpRequest) -> Re
             let mut orders_with_details = Vec::new();
             for row in rows.drain(..) {
                 match load_order_by_db_row(&row) {
-                    Ok(order) => match load_tickets_for_order(&data, order.id.unwrap()).await {
-                        Ok(tickets) => {
-                            orders_with_details.push(OrderWithDetails { order, tickets })
+                    Ok(order) => {
+                        match load_tickets_for_order_locked(&mut engine, order.id.unwrap()) {
+                            Ok(tickets) => {
+                                orders_with_details.push(OrderWithDetails { order, tickets })
+                            }
+                            Err(_) => orders_with_details.push(OrderWithDetails {
+                                order,
+                                tickets: Vec::new(),
+                            }),
                         }
-                        Err(_) => orders_with_details.push(OrderWithDetails {
-                            order,
-                            tickets: Vec::new(),
-                        }),
-                    },
+                    }
                     Err(_) => {}
                 }
             }
@@ -1414,6 +1444,13 @@ async fn load_tickets_for_order(
     order_id: i64,
 ) -> Result<Vec<TicketWithDetails>, String> {
     let mut engine = data.engine.lock();
+    load_tickets_for_order_locked(&mut engine, order_id)
+}
+
+fn load_tickets_for_order_locked(
+    engine: &mut db::engine::Engine,
+    order_id: i64,
+) -> Result<Vec<TicketWithDetails>, String> {
     let sql = format!(
         "SELECT t.id, t.order_id, t.ticket_type_id, t.unit_price, t.status, t.created_at, tt.name as tt_name, tt.price as tt_price, e.id as event_id, e.title as event_title, e.start_time as event_start, e.end_time as event_end, e.venue as event_venue, e.location as event_location FROM tickets t JOIN ticket_types tt ON t.ticket_type_id = tt.id JOIN events e ON tt.event_id = e.id WHERE t.order_id = {}",
         order_id
@@ -1496,6 +1533,13 @@ async fn load_all_tickets_for_user(
     user_id: i64,
 ) -> Result<Vec<TicketWithDetails>, String> {
     let mut engine = data.engine.lock();
+    load_all_tickets_for_user_locked(&mut engine, user_id)
+}
+
+fn load_all_tickets_for_user_locked(
+    engine: &mut db::engine::Engine,
+    user_id: i64,
+) -> Result<Vec<TicketWithDetails>, String> {
     let sql = format!(
         "SELECT t.id, t.order_id, t.ticket_type_id, t.unit_price, t.status, t.created_at, tt.name as tt_name, tt.price as tt_price, e.id as event_id, e.title as event_title, e.start_time as event_start, e.end_time as event_end, e.venue as event_venue, e.location as event_location FROM tickets t JOIN ticket_types tt ON t.ticket_type_id = tt.id JOIN events e ON tt.event_id = e.id JOIN orders o ON t.order_id = o.id WHERE o.customer_user_id = {}",
         user_id

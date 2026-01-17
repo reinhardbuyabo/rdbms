@@ -1,4 +1,5 @@
 use actix_web::{test, web, App};
+use chrono::Utc;
 use db::engine::Engine;
 use parking_lot::Mutex;
 use serde_json::json;
@@ -18,8 +19,11 @@ use backend_service::models::*;
 use backend_service::AppState;
 
 fn create_test_app_state() -> (AppState, tempfile::TempDir) {
-    let temp_dir = tempfile::TempDir::new().unwrap();
+    let temp_dir = tempfile::Builder::new().prefix("test").tempdir().unwrap();
     let db_path = temp_dir.path().join("test.db");
+
+    // Set JWT_SECRET for tests
+    std::env::set_var("JWT_SECRET", "test_secret_key_12345");
 
     let engine = Engine::new(&db_path).unwrap();
     let app_state = AppState {
@@ -35,9 +39,65 @@ fn generate_test_token(user_id: &str, email: &str) -> String {
     jwt_service.generate_token(user_id, email, 3600).unwrap()
 }
 
+async fn create_test_user(app_state: &AppState, user_id: i64, email: &str, role: &str) {
+    let mut engine = app_state.engine.lock();
+
+    // First ensure tables exist
+    let users_sql = r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            google_sub TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            name TEXT,
+            avatar_url TEXT,
+            role TEXT DEFAULT 'CUSTOMER',
+            phone TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    "#;
+    let _ = engine.execute_sql(users_sql);
+
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+
+    // Delete existing user with same ID or email
+    let delete_sql = format!(
+        "DELETE FROM users WHERE id = {} OR email = '{}'",
+        user_id, email
+    );
+    let _ = engine.execute_sql(&delete_sql);
+
+    // Insert new user with specific ID
+    let insert_sql = format!(
+        "INSERT INTO users (id, google_sub, email, name, avatar_url, role, phone, created_at, updated_at) VALUES ({}, 'test-{}', '{}', 'Test User', NULL, '{}', NULL, '{}', '{}')",
+        user_id, user_id, email, role, now, now
+    );
+    let _ = engine.execute_sql(&insert_sql);
+
+    // Also create events table for foreign key
+    let events_sql = r#"
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            organizer_user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            venue TEXT,
+            location TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            status TEXT DEFAULT 'DRAFT',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (organizer_user_id) REFERENCES users(id)
+        )
+    "#;
+    let _ = engine.execute_sql(events_sql);
+}
+
 #[actix_rt::test]
 async fn test_create_event_success() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(
@@ -62,9 +122,12 @@ async fn test_create_event_success() {
 
     let resp = test::call_service(&app, req).await;
 
+    println!("Status: {:?}", resp.status());
+
     assert!(
         resp.status().is_success() || resp.status() == 201,
-        "Should create event successfully"
+        "Should create event successfully, got status: {:?}",
+        resp.status()
     );
 }
 
@@ -96,6 +159,7 @@ async fn test_create_event_without_auth() {
 #[actix_rt::test]
 async fn test_create_event_invalid_times() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(
@@ -161,6 +225,7 @@ async fn test_get_event_with_ticket_types() {
 #[actix_rt::test]
 async fn test_update_event_ownership() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(
@@ -189,6 +254,7 @@ async fn test_update_event_ownership() {
 #[actix_rt::test]
 async fn test_delete_event_ownership() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(
@@ -214,6 +280,7 @@ async fn test_delete_event_ownership() {
 #[actix_rt::test]
 async fn test_publish_event() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -238,6 +305,7 @@ async fn test_publish_event() {
 #[actix_rt::test]
 async fn test_create_ticket_type() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -267,6 +335,7 @@ async fn test_create_ticket_type() {
 #[actix_rt::test]
 async fn test_create_ticket_type_invalid_capacity() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -342,6 +411,7 @@ async fn test_update_ticket_type() {
 #[actix_rt::test]
 async fn test_delete_ticket_type() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -366,6 +436,7 @@ async fn test_delete_ticket_type() {
 #[actix_rt::test]
 async fn test_create_order_empty_items() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -414,6 +485,7 @@ async fn test_create_order_without_auth() {
 #[actix_rt::test]
 async fn test_list_orders() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -461,6 +533,7 @@ async fn test_list_orders_without_auth() {
 #[actix_rt::test]
 async fn test_get_order_not_found() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -486,6 +559,7 @@ async fn test_get_order_not_found() {
 #[actix_rt::test]
 async fn test_update_role() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "user@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "user@test.com");
 
     let app = test::init_service(
@@ -534,6 +608,7 @@ async fn test_update_role_without_auth() {
 #[actix_rt::test]
 async fn test_role_enforcement_customer_cannot_create_event() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -564,6 +639,7 @@ async fn test_role_enforcement_customer_cannot_create_event() {
 #[actix_rt::test]
 async fn test_capacity_check_positive_capacity() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -615,6 +691,7 @@ async fn test_order_validation_negative_quantity() {
 #[actix_rt::test]
 async fn test_ticket_type_price_negative() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -641,6 +718,7 @@ async fn test_ticket_type_price_negative() {
 #[actix_rt::test]
 async fn test_ticket_type_capacity_reduction_below_sold() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -668,6 +746,7 @@ async fn test_ticket_type_capacity_reduction_below_sold() {
 #[actix_rt::test]
 async fn test_delete_ticket_type_with_sales() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -692,6 +771,7 @@ async fn test_delete_ticket_type_with_sales() {
 #[actix_rt::test]
 async fn test_order_creation_multiple_items() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -743,6 +823,7 @@ async fn test_confirm_order_without_auth() {
 #[actix_rt::test]
 async fn test_list_tickets() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -790,6 +871,7 @@ async fn test_list_tickets_without_auth() {
 #[actix_rt::test]
 async fn test_order_confirm_already_paid() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -815,6 +897,7 @@ async fn test_order_confirm_already_paid() {
 #[actix_rt::test]
 async fn test_update_event_invalid_times() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(
@@ -869,6 +952,7 @@ async fn test_draft_event_visibility() {
 #[actix_rt::test]
 async fn test_publish_already_published_event() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -893,6 +977,7 @@ async fn test_publish_already_published_event() {
 #[actix_rt::test]
 async fn test_ticket_type_name_uniqueness() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -922,6 +1007,7 @@ async fn test_ticket_type_name_uniqueness() {
 #[actix_rt::test]
 async fn test_order_total_amount_calculation() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -950,6 +1036,7 @@ async fn test_order_total_amount_calculation() {
 #[actix_rt::test]
 async fn test_ticket_price_snapshot() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -978,6 +1065,7 @@ async fn test_ticket_price_snapshot() {
 #[actix_rt::test]
 async fn test_order_ownership_enforcement() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer1@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer1@test.com");
 
     let app = test::init_service(
@@ -1003,6 +1091,7 @@ async fn test_order_ownership_enforcement() {
 #[actix_rt::test]
 async fn test_organizer_sales_view() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(
@@ -1028,6 +1117,7 @@ async fn test_organizer_sales_view() {
 #[actix_rt::test]
 async fn test_order_status_workflow() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -1056,6 +1146,7 @@ async fn test_order_status_workflow() {
 #[actix_rt::test]
 async fn test_event_status_transitions() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let create_app = test::init_service(
@@ -1086,6 +1177,7 @@ async fn test_event_status_transitions() {
 #[actix_rt::test]
 async fn test_join_heavy_orders_endpoint() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -1111,6 +1203,7 @@ async fn test_join_heavy_orders_endpoint() {
 #[actix_rt::test]
 async fn test_order_creation_capacity_check() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "customer@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "customer@test.com");
 
     let app = test::init_service(
@@ -1139,6 +1232,7 @@ async fn test_order_creation_capacity_check() {
 #[actix_rt::test]
 async fn test_update_ticket_type_for_published_event() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -1166,6 +1260,7 @@ async fn test_update_ticket_type_for_published_event() {
 #[actix_rt::test]
 async fn test_update_ticket_type_for_cancelled_event() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "organizer@test.com", "ORGANIZER").await;
     let jwt_token = generate_test_token("1", "organizer@test.com");
 
     let app = test::init_service(App::new().app_data(web::Data::new(app_state)).route(
@@ -1193,6 +1288,7 @@ async fn test_update_ticket_type_for_cancelled_event() {
 #[actix_rt::test]
 async fn test_data_integrity_event_organizer() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "test@test.com", "ORGANIZER").await;
 
     let app = test::init_service(
         App::new()
@@ -1307,6 +1403,7 @@ async fn test_pagination_if_implemented() {
 #[actix_rt::test]
 async fn test_idempotent_role_change() {
     let (app_state, _temp_dir) = create_test_app_state();
+    create_test_user(&app_state, 1, "user@test.com", "CUSTOMER").await;
     let jwt_token = generate_test_token("1", "user@test.com");
 
     let app = test::init_service(
