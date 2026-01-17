@@ -21,7 +21,7 @@ COPY . .
 
 # Build all binaries: REPL, TCP server, and backend-service (REST API)
 RUN cargo build --release -p db --features tcp-server
-RUN cargo build --release -p backend-service
+RUN cargo build --release -p backend_service
 
 # Runtime stage
 FROM alpine:3.19 AS runtime

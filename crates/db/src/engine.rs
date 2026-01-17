@@ -322,6 +322,10 @@ impl Engine {
                     continue;
                 }
                 if values[idx].is_null() && !field.nullable {
+                    let column_def = table.columns.iter().find(|c| c.name == field.name);
+                    if column_def.map(|c| c.auto_increment).unwrap_or(false) {
+                        continue;
+                    }
                     bail!("missing value for non-nullable column {}", field.name);
                 }
             }
@@ -381,6 +385,7 @@ impl Engine {
             primary_key: bool,
             unique: bool,
             default_value: Option<SerializedDefaultValue>,
+            auto_increment: bool,
         }
 
         #[derive(Serialize, Clone)]
@@ -428,6 +433,7 @@ impl Engine {
                     primary_key: c.primary_key,
                     unique: c.unique,
                     default_value: c.default_value.as_ref().map(|v| v.clone().into()),
+                    auto_increment: c.auto_increment,
                 })
                 .collect();
 
@@ -482,6 +488,8 @@ impl Engine {
             primary_key: bool,
             unique: bool,
             default_value: Option<SerializedDefaultValue>,
+            #[serde(default)]
+            auto_increment: bool,
         }
 
         #[derive(Deserialize, Clone)]
@@ -550,6 +558,7 @@ impl Engine {
                         primary_key: c.primary_key,
                         unique: c.unique,
                         default_value: c.default_value.as_ref().map(|v| (*v).clone().into()),
+                        auto_increment: c.auto_increment,
                     })
                 })
                 .collect();
@@ -572,6 +581,8 @@ impl Engine {
                 .map_err(|e| anyhow!("failed to load table heap: {}", e))?;
 
             let mut table = TableInfo::with_columns(table_data.name.clone(), schema, columns, heap);
+
+            table.seed_auto_increment_counter()?;
 
             for idx in &table_data.indexes {
                 let column_names: Vec<&str> = idx.columns.iter().map(|c| c.as_str()).collect();

@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::time::Duration;
 use url::form_urlencoded;
 
+use crate::app_state::AppState;
 use crate::jwt::JwtService;
 use crate::models::*;
-use crate::AppState;
 use query::Tuple;
 
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -46,7 +46,6 @@ pub async fn google_auth_callback(
         .get("code")
         .ok_or_else(|| actix_web::error::ErrorBadRequest("Missing authorization code"))?;
 
-    // Exchange code for access token
     let token_response = exchange_code_for_token(code).await.map_err(|e| {
         actix_web::error::ErrorInternalServerError(format!(
             "Failed to exchange code for token: {}",
@@ -58,17 +57,14 @@ pub async fn google_auth_callback(
         actix_web::error::ErrorInternalServerError("Missing access_token in response")
     })?;
 
-    // Get user info from Google
     let user_info = get_google_user_info(access_token).await.map_err(|e| {
         actix_web::error::ErrorInternalServerError(format!("Failed to get user info: {}", e))
     })?;
 
-    // Upsert user in database
     let user = upsert_user(&data, &user_info).await.map_err(|e| {
         actix_web::error::ErrorInternalServerError(format!("Failed to upsert user: {}", e))
     })?;
 
-    // Generate JWT
     let jwt_secret = std::env::var("JWT_SECRET")
         .map_err(|_| actix_web::error::ErrorInternalServerError("JWT_SECRET not set"))?;
 
@@ -90,16 +86,13 @@ pub async fn google_auth_callback(
 }
 
 pub async fn get_me(req: HttpRequest, data: web::Data<AppState>) -> Result<HttpResponse> {
-    // Extract Authorization header
     let auth_header = req
         .headers()
         .get("Authorization")
         .and_then(|h| h.to_str().ok());
 
     let token = match auth_header {
-        Some(header) if header.starts_with("Bearer ") => {
-            &header[7..] // Remove "Bearer " prefix
-        }
+        Some(header) if header.starts_with("Bearer ") => &header[7..],
         _ => {
             return Ok(HttpResponse::Unauthorized().json(json!({
                 "error": "AUTH_REQUIRED",
@@ -115,7 +108,6 @@ pub async fn get_me(req: HttpRequest, data: web::Data<AppState>) -> Result<HttpR
 
     match jwt_service.verify_token(token) {
         Ok(claims) => {
-            // Load user from database
             let user_id: i64 = claims
                 .sub
                 .parse()
@@ -127,6 +119,126 @@ pub async fn get_me(req: HttpRequest, data: web::Data<AppState>) -> Result<HttpR
 
             let response = MeResponse { user };
             Ok(HttpResponse::Ok().json(response))
+        }
+        Err(e) => Ok(HttpResponse::Unauthorized().json(json!({
+            "error": "INVALID_TOKEN",
+            "message": format!("Invalid token: {}", e)
+        }))),
+    }
+}
+
+pub async fn update_role(
+    req: web::Json<RoleChangeRequest>,
+    data: web::Data<AppState>,
+    req_http: HttpRequest,
+) -> Result<HttpResponse> {
+    let auth_header = req_http
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok());
+
+    let token = match auth_header {
+        Some(header) if header.starts_with("Bearer ") => &header[7..],
+        _ => {
+            return Ok(HttpResponse::Unauthorized().json(json!({
+                "error": "AUTH_REQUIRED",
+                "message": "Authorization header with Bearer token required"
+            })));
+        }
+    };
+
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| actix_web::error::ErrorInternalServerError("JWT_SECRET not set"))?;
+
+    let jwt_service = JwtService::new(&jwt_secret);
+
+    match jwt_service.verify_token(token) {
+        Ok(claims) => {
+            let requester_id: i64 = claims
+                .sub
+                .parse()
+                .map_err(|_| actix_web::error::ErrorBadRequest("Invalid user ID in token"))?;
+
+            let role_change_req = req.into_inner();
+
+            let requester = load_user_by_id(&data, requester_id).await.map_err(|e| {
+                actix_web::error::ErrorBadRequest(format!("Failed to load requester: {}", e))
+            })?;
+
+            match role_change_req.role {
+                UserRole::ORGANIZER => {
+                    if requester.role != UserRole::ORGANIZER {
+                        return Ok(HttpResponse::Forbidden().json(json!({
+                            "error": "FORBIDDEN",
+                            "message": "Only organizers can assign organizer role"
+                        })));
+                    }
+                }
+                UserRole::CUSTOMER => {}
+            }
+
+            let user =
+                update_user_role(&data, role_change_req.target_user_id, role_change_req.role)
+                    .await
+                    .map_err(|e| {
+                        actix_web::error::ErrorBadRequest(format!("Failed to update role: {}", e))
+                    })?;
+
+            Ok(HttpResponse::Ok().json(json!({
+                "user": user,
+                "message": "Role updated successfully"
+            })))
+        }
+        Err(e) => Ok(HttpResponse::Unauthorized().json(json!({
+            "error": "INVALID_TOKEN",
+            "message": format!("Invalid token: {}", e)
+        }))),
+    }
+}
+
+pub async fn update_profile(
+    req: web::Json<UserUpdateRequest>,
+    data: web::Data<AppState>,
+    req_http: HttpRequest,
+) -> Result<HttpResponse> {
+    let auth_header = req_http
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok());
+
+    let token = match auth_header {
+        Some(header) if header.starts_with("Bearer ") => &header[7..],
+        _ => {
+            return Ok(HttpResponse::Unauthorized().json(json!({
+                "error": "AUTH_REQUIRED",
+                "message": "Authorization header with Bearer token required"
+            })));
+        }
+    };
+
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| actix_web::error::ErrorInternalServerError("JWT_SECRET not set"))?;
+
+    let jwt_service = JwtService::new(&jwt_secret);
+
+    match jwt_service.verify_token(token) {
+        Ok(claims) => {
+            let user_id: i64 = claims
+                .sub
+                .parse()
+                .map_err(|_| actix_web::error::ErrorBadRequest("Invalid user ID in token"))?;
+
+            let update_req = req.into_inner();
+            let user = update_user_profile(&data, user_id, update_req.name, update_req.phone)
+                .await
+                .map_err(|e| {
+                    actix_web::error::ErrorBadRequest(format!("Failed to update profile: {}", e))
+                })?;
+
+            Ok(HttpResponse::Ok().json(json!({
+                "user": user,
+                "message": "Profile updated successfully"
+            })))
         }
         Err(e) => Ok(HttpResponse::Unauthorized().json(json!({
             "error": "INVALID_TOKEN",
@@ -189,16 +301,16 @@ async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserIn
 async fn upsert_user(data: &AppState, google_user: &GoogleUserInfo) -> anyhow::Result<User> {
     let mut engine = data.engine.lock();
 
-    // Check if user exists by google_sub
+    create_tables(&mut engine)?;
+
     let check_sql = format!(
-        "SELECT id, google_sub, email, name, avatar_url, created_at, updated_at FROM users WHERE google_sub = '{}'",
+        "SELECT id, google_sub, email, name, avatar_url, role, phone, created_at, updated_at FROM users WHERE google_sub = '{}'",
         escape_sql_string(&google_user.sub)
     );
 
     match engine.execute_sql(&check_sql) {
         Ok(db::printer::ReplOutput::Rows { mut rows, .. }) => {
             if let Some(row) = rows.pop() {
-                // User exists, update
                 let update_sql = format!(
                     "UPDATE users SET name = {}, avatar_url = {}, updated_at = '{}' WHERE id = {}",
                     google_user
@@ -212,37 +324,35 @@ async fn upsert_user(data: &AppState, google_user: &GoogleUserInfo) -> anyhow::R
                         .map(|p| format!("'{}'", escape_sql_string(p)))
                         .unwrap_or("NULL".to_string()),
                     Utc::now().format("%Y-%m-%d %H:%M:%S"),
-                    format_value(&row.values()[0]) // id
+                    format_value(&row.values()[0])
                 );
 
                 engine
                     .execute_sql(&update_sql)
                     .context("Failed to update user")?;
 
-                // Return updated user
-                load_user_by_db_row(&row)
+                let user_id = row.values()[0].as_i64().unwrap();
+                load_user_by_id_locked(&mut engine, user_id)
             } else {
-                // User doesn't exist, create
                 create_user(&mut engine, google_user)
             }
         }
-        Ok(_) => {
-            // Table doesn't exist or no rows, create user
-            create_user(&mut engine, google_user)
-        }
-        Err(_e) => {
-            // Try to create table first, then user
-            create_users_table(&mut engine)?;
-            create_user(&mut engine, google_user)
-        }
+        Ok(_other) => create_user(&mut engine, google_user),
+        Err(_e) => create_user(&mut engine, google_user),
     }
 }
 
-async fn load_user_by_id(data: &AppState, user_id: i64) -> anyhow::Result<User> {
+pub async fn load_user_by_id(data: &AppState, user_id: i64) -> anyhow::Result<User> {
     let mut engine = data.engine.lock();
+    load_user_by_id_locked(&mut engine, user_id)
+}
 
+pub fn load_user_by_id_locked(
+    engine: &mut db::engine::Engine,
+    user_id: i64,
+) -> anyhow::Result<User> {
     let sql = format!(
-        "SELECT id, google_sub, email, name, avatar_url, created_at, updated_at FROM users WHERE id = {}",
+        "SELECT id, google_sub, email, name, avatar_url, role, phone, created_at, updated_at FROM users WHERE id = {}",
         user_id
     );
 
@@ -260,22 +370,87 @@ async fn load_user_by_id(data: &AppState, user_id: i64) -> anyhow::Result<User> 
     }
 }
 
-fn create_users_table(engine: &mut db::engine::Engine) -> anyhow::Result<()> {
-    let create_sql = r#"
+pub fn create_tables(engine: &mut db::engine::Engine) -> anyhow::Result<()> {
+    let users_sql = r#"
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             google_sub TEXT UNIQUE NOT NULL,
             email TEXT UNIQUE NOT NULL,
             name TEXT,
             avatar_url TEXT,
+            role TEXT DEFAULT 'CUSTOMER',
+            phone TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
     "#;
 
-    engine
-        .execute_sql(create_sql)
-        .context("Failed to create users table")?;
+    engine.execute_sql(users_sql)?;
+
+    let events_sql = r#"
+        CREATE TABLE IF NOT EXISTS events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            organizer_user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            venue TEXT,
+            location TEXT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            status TEXT DEFAULT 'DRAFT',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (organizer_user_id) REFERENCES users(id)
+        )
+    "#;
+
+    engine.execute_sql(events_sql)?;
+
+    let ticket_types_sql = r#"
+        CREATE TABLE IF NOT EXISTS ticket_types (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            price INTEGER NOT NULL,
+            capacity INTEGER NOT NULL,
+            sales_start TEXT,
+            sales_end TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (event_id) REFERENCES events(id)
+        )
+    "#;
+
+    engine.execute_sql(ticket_types_sql)?;
+
+    let orders_sql = r#"
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_user_id INTEGER NOT NULL,
+            status TEXT DEFAULT 'PENDING',
+            total_amount INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (customer_user_id) REFERENCES users(id)
+        )
+    "#;
+
+    engine.execute_sql(orders_sql)?;
+
+    let tickets_sql = r#"
+        CREATE TABLE IF NOT EXISTS tickets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            ticket_type_id INTEGER NOT NULL,
+            unit_price INTEGER NOT NULL,
+            status TEXT DEFAULT 'HELD',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (order_id) REFERENCES orders(id),
+            FOREIGN KEY (ticket_type_id) REFERENCES ticket_types(id)
+        )
+    "#;
+
+    engine.execute_sql(tickets_sql)?;
 
     Ok(())
 }
@@ -287,7 +462,7 @@ fn create_user(
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
 
     let insert_sql = format!(
-        "INSERT INTO users (google_sub, email, name, avatar_url, created_at, updated_at) VALUES ('{}', '{}', {}, {}, '{}', '{}')",
+        "INSERT INTO users (google_sub, email, name, avatar_url, role, created_at, updated_at) VALUES ('{}', '{}', {}, {}, 'CUSTOMER', '{}', '{}')",
         escape_sql_string(&google_user.sub),
         escape_sql_string(&google_user.email),
         google_user
@@ -304,13 +479,12 @@ fn create_user(
         now
     );
 
-    engine
-        .execute_sql(&insert_sql)
-        .context("Failed to create user")?;
+    if let Err(e) = engine.execute_sql(&insert_sql) {
+        return Err(anyhow!("Failed to insert user: {}", e));
+    }
 
-    // Load the created user to get the ID
     let select_sql = format!(
-        "SELECT id, google_sub, email, name, avatar_url, created_at, updated_at FROM users WHERE google_sub = '{}'",
+        "SELECT id, google_sub, email, name, avatar_url, role, phone, created_at, updated_at FROM users WHERE google_sub = '{}'",
         escape_sql_string(&google_user.sub)
     );
 
@@ -322,27 +496,99 @@ fn create_user(
                 Err(anyhow!("Failed to retrieve created user"))
             }
         }
-        _ => Err(anyhow!("Failed to query created user")),
+        Ok(_other) => Err(anyhow!("Failed to query created user")),
+        Err(e) => Err(anyhow!("Failed to query created user: {}", e)),
     }
+}
+
+async fn update_user_role(data: &AppState, user_id: i64, role: UserRole) -> anyhow::Result<User> {
+    let mut engine = data.engine.lock();
+
+    let role_str = match role {
+        UserRole::CUSTOMER => "CUSTOMER",
+        UserRole::ORGANIZER => "ORGANIZER",
+    };
+
+    let update_sql = format!(
+        "UPDATE users SET role = '{}', updated_at = '{}' WHERE id = {}",
+        role_str,
+        Utc::now().format("%Y-%m-%d %H:%M:%S"),
+        user_id
+    );
+
+    engine.execute_sql(&update_sql)?;
+
+    load_user_by_id_locked(&mut engine, user_id)
+}
+
+async fn update_user_profile(
+    data: &AppState,
+    user_id: i64,
+    name: Option<String>,
+    phone: Option<String>,
+) -> anyhow::Result<User> {
+    let mut engine = data.engine.lock();
+
+    let mut set_parts = Vec::new();
+
+    if let Some(ref n) = name {
+        set_parts.push(format!("name = '{}'", escape_sql_string(n)));
+    }
+
+    if let Some(ref p) = phone {
+        set_parts.push(format!("phone = '{}'", escape_sql_string(p)));
+    }
+
+    set_parts.push(format!(
+        "updated_at = '{}'",
+        Utc::now().format("%Y-%m-%d %H:%M:%S")
+    ));
+
+    let update_sql = format!(
+        "UPDATE users SET {} WHERE id = {}",
+        set_parts.join(", "),
+        user_id
+    );
+
+    engine.execute_sql(&update_sql)?;
+
+    load_user_by_id_locked(&mut engine, user_id)
 }
 
 fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {
     let values = row.values();
 
-    let id = Some(values[0].as_i64()?);
+    if values.is_empty() {
+        return Err(anyhow!("Empty row returned"));
+    }
+
+    let id = match values[0].as_i64() {
+        Ok(v) => Some(v),
+        Err(e) => {
+            return Err(anyhow!("Failed to get id: {}", e));
+        }
+    };
     let google_sub = values[1].as_str()?.to_string();
     let email = values[2].as_str()?.to_string();
     let name = values[3].as_str().ok().map(|s: &str| s.to_string());
     let avatar_url = values[4].as_str().ok().map(|s: &str| s.to_string());
 
-    let created_at_str = values[5]
+    let role_str = values[5].as_str()?.to_string();
+    let role = match role_str.as_str() {
+        "ORGANIZER" => UserRole::ORGANIZER,
+        _ => UserRole::CUSTOMER,
+    };
+
+    let phone = values[6].as_str().ok().map(|s: &str| s.to_string());
+
+    let created_at_str = values[7]
         .as_str()
         .map_err(|_| anyhow!("Invalid created_at value"))?;
     let created_at_naive = NaiveDateTime::parse_from_str(created_at_str, "%Y-%m-%d %H:%M:%S")
         .with_context(|| format!("Invalid created_at timestamp: {}", created_at_str))?;
     let created_at: DateTime<Utc> = DateTime::from_naive_utc_and_offset(created_at_naive, Utc);
 
-    let updated_at_str = values[6]
+    let updated_at_str = values[8]
         .as_str()
         .map_err(|_| anyhow!("Invalid updated_at value"))?;
     let updated_at_naive = NaiveDateTime::parse_from_str(updated_at_str, "%Y-%m-%d %H:%M:%S")
@@ -355,6 +601,8 @@ fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {
         email,
         name,
         avatar_url,
+        role,
+        phone,
         created_at,
         updated_at,
     })
@@ -377,7 +625,6 @@ fn escape_sql_string(input: &str) -> String {
 mod tests {
     use super::*;
     use parking_lot::Mutex;
-    use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile;
 
@@ -397,10 +644,9 @@ mod tests {
         let engine = db::engine::Engine::new(db_path).unwrap();
         let mut engine = engine;
 
-        let result = create_users_table(&mut engine);
+        let result = create_tables(&mut engine);
         assert!(result.is_ok());
 
-        // Verify table exists by querying it
         let result = engine.execute_sql("SELECT COUNT(*) FROM users");
         assert!(result.is_ok());
     }
@@ -430,6 +676,7 @@ mod tests {
             assert!(user.id.is_some());
             assert_eq!(user.google_sub, "12345");
             assert_eq!(user.email, "test@example.com");
+            assert_eq!(user.role, UserRole::CUSTOMER);
         }
     }
 
@@ -467,5 +714,34 @@ mod tests {
         if let Ok(user) = result {
             assert_eq!(user.name, Some("Updated Name".to_string()));
         }
+    }
+
+    #[tokio::test]
+    async fn test_update_user_role() {
+        let temp_dir = tempfile::Builder::new().prefix("test").tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        let engine = db::engine::Engine::new(&db_path).unwrap();
+        let transactions = Arc::new(Mutex::new(HashMap::new()));
+        let app_state = AppState {
+            engine: Arc::new(Mutex::new(engine)),
+            transactions,
+        };
+
+        let google_user = GoogleUserInfo {
+            sub: "12345".to_string(),
+            email: "test@example.com".to_string(),
+            name: Some("Test User".to_string()),
+            picture: Some("https://example.com/avatar.jpg".to_string()),
+            email_verified: Some(true),
+        };
+
+        let user = upsert_user(&app_state, &google_user).await.unwrap();
+        assert_eq!(user.role, UserRole::CUSTOMER);
+
+        let updated_user = update_user_role(&app_state, user.id.unwrap(), UserRole::ORGANIZER)
+            .await
+            .unwrap();
+        assert_eq!(updated_user.role, UserRole::ORGANIZER);
     }
 }

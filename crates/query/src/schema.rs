@@ -36,6 +36,7 @@ pub struct ColumnDef {
     pub primary_key: bool,
     pub unique: bool,
     pub default_value: Option<DefaultValue>,
+    pub auto_increment: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

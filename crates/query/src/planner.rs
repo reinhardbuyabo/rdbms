@@ -547,6 +547,7 @@ impl LogicalPlanner {
         let mut primary_key = false;
         let mut unique = false;
         let mut default_value = None;
+        let mut auto_increment = false;
         for option in col.options {
             match option.option {
                 ColumnOption::Null => nullable = true,
@@ -563,6 +564,16 @@ impl LogicalPlanner {
                         bail!("BLOB columns cannot have DEFAULT values");
                     }
                     default_value = Some(self.plan_expr_to_default(expr)?);
+                }
+                ColumnOption::DialectSpecific(tokens) => {
+                    let token_str = tokens.iter().map(|t| t.to_string()).collect::<String>();
+                    let token_upper = token_str.to_uppercase();
+                    if token_upper.contains("AUTOINCREMENT")
+                        || token_upper.contains("AUTO_INCREMENT")
+                    {
+                        auto_increment = true;
+                        nullable = false;
+                    }
                 }
 
                 _ => {}
@@ -583,6 +594,7 @@ impl LogicalPlanner {
             primary_key,
             unique,
             default_value,
+            auto_increment,
         })
     }
 
