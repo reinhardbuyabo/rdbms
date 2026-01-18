@@ -1,4 +1,4 @@
-.PHONY: help build build-release test test-all clean run-repl run-server run-backend-service run-docker stop-docker docs install-systemd db-init db-init-api db-reset
+.PHONY: help build build-release test test-all clean run-repl run-server run-backend-service run-docker stop-docker docker-compose-build docker-compose-up docker-compose-up-with-init docker-compose-down docker-compose-logs docker-compose-logs-service docker-compose-restart docker-compose-clean docs install-systemd db-init db-init-api db-reset
 
 # Default settings
 DB_PATH ?= ./data.db
@@ -37,9 +37,18 @@ help:
 	@echo "  make db-reset       - Delete database file (for fresh start)"
 	@echo ""
 	@echo "Docker Commands:"
-	@echo "  make docker-build   - Build Docker image"
-	@echo "  make docker-run     - Run server in Docker"
-	@echo "  make stop-docker    - Stop Docker containers"
+	@echo "  make docker-build           - Build Docker image"
+	@echo "  make docker-run             - Run server in Docker"
+	@echo "  make stop-docker            - Stop Docker containers"
+	@echo ""
+	@echo "Docker Compose Commands:"
+	@echo "  make docker-compose-build       - Build all services with docker-compose"
+	@echo "  make docker-compose-up          - Start all services (TCP + REST API)"
+	@echo "  make docker-compose-up-with-init- Start services and initialize database"
+	@echo "  make docker-compose-down        - Stop all services"
+	@echo "  make docker-compose-logs        - Show logs for all services"
+	@echo "  make docker-compose-restart     - Restart all services"
+	@echo "  make docker-compose-clean       - Stop services and remove volumes"
 	@echo ""
 	@echo "Systemd Commands:"
 	@echo "  make install-systemd  - Install as systemd service (requires root)"
@@ -101,7 +110,7 @@ run-backend-service: build
 run-backend-service-release: build-release
 	@echo "$(GREEN)Starting backend-service on port $(PORT)$(NC)"
 	@echo "$(GREEN)Database: $(DB_PATH)$(NC)"
-	@DB_PATH=$(DB_PATH) PORT=$(PORT) ./target/release/backend-service
+	@DB_PATH=$(DB_PATH) PORT=$(PORT) ./target/release/backend_service
 
 # Docker commands
 docker-build:
@@ -122,6 +131,51 @@ docker-stop:
 	@docker stop rdbms-server 2>/dev/null || true
 	@docker rm rdbms-server 2>/dev/null || true
 	@echo "$(GREEN)Docker containers stopped$(NC)"
+
+# Docker Compose commands
+docker-compose-build:
+	@echo "$(YELLOW)Building Docker images with docker-compose...$(NC)"
+	@docker compose build
+
+docker-compose-up:
+	@echo "$(YELLOW)Starting all services with docker-compose...$(NC)"
+	@docker compose up -d
+	@echo "$(GREEN)Services started!$(NC)"
+	@echo "  - TCP Server:  localhost:5432"
+	@echo "  - REST API:    localhost:8080"
+	@echo "  - Health:      http://localhost:8080/api/health"
+
+docker-compose-up-with-init:
+	@echo "$(YELLOW)Starting all services with database initialization...$(NC)"
+	@docker compose up -d rdbmsd backend-service
+	@echo "$(GREEN)Waiting for services to be healthy...$(NC)"
+	@docker compose up -d db-init
+	@echo "$(GREEN)Database initialized!$(NC)"
+	@echo "  - TCP Server:  localhost:5432"
+	@echo "  - REST API:    localhost:8080"
+
+docker-compose-down:
+	@echo "$(YELLOW)Stopping all Docker Compose services...$(NC)"
+	@docker compose down
+	@echo "$(GREEN)Services stopped$(NC)"
+
+docker-compose-logs:
+	@echo "$(YELLOW)Showing logs for all services...$(NC)"
+	@docker compose logs -f
+
+docker-compose-logs-service:
+	@echo "$(YELLOW)Showing logs for $(SERVICE)...$(NC)"
+	@docker compose logs -f $(SERVICE)
+
+docker-compose-restart:
+	@echo "$(YELLOW)Restarting all services...$(NC)"
+	@docker compose restart
+	@echo "$(GREEN)Services restarted$(NC)"
+
+docker-compose-clean:
+	@echo "$(YELLOW)Stopping services and removing volumes...$(NC)"
+	@docker compose down -v
+	@echo "$(GREEN)All data removed$(NC)"
 
 # Systemd installation
 install-systemd:
@@ -197,6 +251,6 @@ install:
 	@echo "$(YELLOW)Installing RDBMS binaries to /usr/local/bin...$(NC)"
 	@cp target/release/rdbms /usr/local/bin/rdbms 2>/dev/null || echo "Run 'make build-release' first"
 	@cp target/release/rdbmsd /usr/local/bin/rdbmsd 2>/dev/null || echo "Run 'make build-release' first"
-	@cp target/release/backend-service /usr/local/bin/backend-service 2>/dev/null || echo "Run 'make build-release' first"
+	@cp target/release/backend_service /usr/local/bin/backend-service 2>/dev/null || echo "Run 'make build-release' first"
 	@echo "$(GREEN)Installed!$(NC)"
 	@echo "Run with: rdbms --help, rdbmsd --help, or backend-service --help"

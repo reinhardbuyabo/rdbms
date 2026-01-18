@@ -1,0 +1,86 @@
+services:
+  rdbmsd:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        SERVICE_BINARY: rdbmsd
+    container_name: rdbms-server
+    image: rdbms:${DOCKER_TAG:-latest}-rdbmsd
+    environment:
+      - SERVICE=tcp
+      - DB_PATH=/data/database.db
+      - LISTEN=0.0.0.0:5432
+    ports:
+      - "5432:5432"
+    volumes:
+      - rdbms_data:/data
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rdbms-network
+
+  backend-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        SERVICE_BINARY: backend_service
+    container_name: backend-service
+    image: rdbms:${DOCKER_TAG:-latest}-backend
+    environment:
+      - SERVICE=api
+      - DB_PATH=/data/database.db
+      - PORT=8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - rdbms_data:/data
+    depends_on:
+      rdbmsd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rdbms-network
+
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        SERVICE_BINARY: rdbms
+    container_name: db-init
+    image: rdbms:${DOCKER_TAG:-latest}-dbinit
+    environment:
+      - API_URL=http://backend-service:8080
+      - DB_DIR=/db
+    volumes:
+      - ./db:/db:ro
+    depends_on:
+      backend-service:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - "python3 /usr/local/bin/docker-init.py"
+    networks:
+      - rdbms-network
+
+volumes:
+  rdbms_data:
+    driver: local
+
+networks:
+  rdbms-network:
+    driver: bridge

@@ -1,4 +1,4 @@
-use actix_web::{App, test, web};
+use actix_web::{test, web, App};
 use chrono::Utc;
 use db::engine::Engine;
 use db::printer::ReplOutput;
@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile;
 
-use backend_service::AppState;
 use backend_service::auth::update_role;
 use backend_service::handlers::{
     confirm_order, create_event, create_order, create_ticket_type, delete_event,
@@ -16,6 +15,7 @@ use backend_service::handlers::{
     list_tickets, publish_event, update_event, update_ticket_type,
 };
 use backend_service::jwt::JwtService;
+use backend_service::AppState;
 
 fn create_test_app_state() -> (AppState, tempfile::TempDir) {
     let temp_dir = tempfile::Builder::new().prefix("test").tempdir().unwrap();

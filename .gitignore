@@ -41,3 +41,15 @@ data.catalog
 *.wal
 *.wal-shm
 *.wal-lock
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.Python
+venv/
+env/
+.venv/

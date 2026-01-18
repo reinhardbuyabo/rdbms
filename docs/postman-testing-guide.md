@@ -29,7 +29,7 @@ In Postman, create the following environment variables:
 ### 2. Start API Service
 
 ```bash
-cd /path/to/jan-capstone
+cd /path/to/rdbms
 cargo run -p api
 ```
 
