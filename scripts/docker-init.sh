@@ -22,4 +22,6 @@ wait_for_api() {
     exit 1
 }
 
+wait_for_api
+
 python3 /usr/local/bin/docker-init.py

@@ -112,6 +112,13 @@ class TestSplitSqlStatements(unittest.TestCase):
         self.assertIn("-- Comment", statements[0])
         self.assertIn("SELECT * FROM users", statements[0])
 
+    def test_escaped_single_quotes(self):
+        """Statement with escaped single quotes (SQL '') should be parsed correctly."""
+        content = "INSERT INTO users (id, name) VALUES ('usr_1', 'It''s a test');"
+        statements = list(split_sql_statements(content))
+        self.assertEqual(len(statements), 1)
+        self.assertIn("It''s a test", statements[0])
+
 
 class TestIntegration(unittest.TestCase):
     """Integration tests using temporary SQL files."""

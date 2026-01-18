@@ -37,7 +37,7 @@ RUN addgroup -g 1000 app && \
 RUN mkdir -p /data && chown -R app:app /data
 
 # Copy the appropriate binary based on build arg
-ARG SERVICE_BINARY
+ARG SERVICE_BINARY=rdbmsd
 COPY --from=builder /app/target/release/${SERVICE_BINARY} /usr/local/bin/
 
 # Copy Python init script for db-init service

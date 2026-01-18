@@ -32,8 +32,8 @@ Content-Type: application/json
 {
   "columns": ["id", "name", "email"],
   "rows": [
-    [{"type":"int","value":1}, {"type":"text","value":"Alice"}],
-    [{"type":"text","value":"Bob"}]
+    [{"type":"int","value":1}, {"type":"text","value":"Alice"}, {"type":"text","value":"alice@example.com"}],
+    [{"type":"int","value":2}, {"type":"text","value":"Bob"}, {"type":"text","value":"bob@example.com"}]
   ],
   "rows_affected": 2,
   "message": null
@@ -146,7 +146,7 @@ window.location.href = 'http://localhost:8080/auth/google/start';
 // The server handles the callback and sets a JWT cookie
 
 // Step 3: Access protected endpoints
-const response = await fetch('/api/me', {
+const response = await fetch('/v1/users/me', {
   headers: {
     'Authorization': 'Bearer ' + jwtToken
   }
@@ -155,10 +155,17 @@ const response = await fetch('/api/me', {
 
 ### Protected Endpoints
 
-The following endpoints require authentication:
-- `GET /api/me` - Get current user profile
-- `GET /auth/google/start` - Start OAuth flow
-- `GET /auth/google/callback` - OAuth callback
+The following endpoints require Bearer token authentication:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/v1/users/me` | Get current user profile |
+| `PATCH` | `/v1/users/me` | Update current user profile |
+| `POST` | `/v1/users/me/role` | Update user role |
+
+**Public OAuth endpoints:**
+- `GET /auth/google/start` - Start OAuth flow (public, redirects to Google)
+- `GET /auth/google/callback` - OAuth callback (public, handles Google redirect)
 
 ## Transaction Workflow
 

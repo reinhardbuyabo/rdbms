@@ -42,6 +42,7 @@ def split_sql_statements(content):
     - Multi-line statements
     - Nested parentheses
     - Quotes (single and double)
+    - Escaped single quotes (SQL uses '' to escape)
     - Comments within statements
 
     Args:
@@ -53,8 +54,11 @@ def split_sql_statements(content):
     statement = ""
     in_quote = None
     paren_depth = 0
+    i = 0
 
-    for char in content:
+    while i < len(content):
+        char = content[i]
+
         if in_quote is None:
             if char in ("'", '"'):
                 in_quote = char
@@ -65,12 +69,17 @@ def split_sql_statements(content):
                     paren_depth -= 1
         elif char == in_quote:
             in_quote = None
+        elif char == "'" and in_quote == "'":
+            if i + 1 < len(content) and content[i + 1] == "'":
+                i += 1
 
         statement += char
 
         if char == ";" and paren_depth == 0 and in_quote is None:
             yield statement.strip()
             statement = ""
+
+        i += 1
 
     if statement.strip():
         yield statement.strip()
@@ -108,7 +117,7 @@ def execute_statement(stmt, api_url=None):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req) as response:
+    with urllib.request.urlopen(req, timeout=2) as response:
         return json.loads(response.read().decode("utf-8"))
 
 

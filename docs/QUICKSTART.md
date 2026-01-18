@@ -404,7 +404,7 @@ curl -X POST http://localhost:8080/api/sql \
   -d '{"sql":"CREATE TABLE test (id INT, name TEXT)"}'
 ```
 
-**Note:** The `db-init` service uses `scripts/docker-init.sh` to execute SQL files from `db/` directory on startup.
+**Note:** The `db-init` service uses `python3 /usr/local/bin/docker-init.py` (a Python-based initializer) to execute SQL files from the `db/` directory on startup.
 
 ---
 

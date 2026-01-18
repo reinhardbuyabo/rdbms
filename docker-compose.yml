@@ -59,8 +59,6 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
-      args:
-        SERVICE_BINARY: rdbms
     container_name: db-init
     image: rdbms:${DOCKER_TAG:-latest}-dbinit
     environment:

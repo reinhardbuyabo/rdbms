@@ -30,7 +30,7 @@ In Postman, create the following environment variables:
 
 ```bash
 cd /path/to/rdbms
-cargo run -p api
+cargo run -p backend_service
 ```
 
 ### 3. Verify Service is Running

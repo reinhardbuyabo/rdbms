@@ -108,7 +108,7 @@ docker compose down -v
 ```
 
 **Services started:**
-- `rdbms-server` - TCP server on port 5432
+- `rdbmsd` - TCP server on port 5432
 - `backend-service` - REST API on port 8080
 - `db-init` - Database initialization (runs once)
 
