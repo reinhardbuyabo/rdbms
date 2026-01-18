@@ -29,8 +29,8 @@ In Postman, create the following environment variables:
 ### 2. Start API Service
 
 ```bash
-cd /path/to/jan-capstone
-cargo run -p api
+cd /path/to/rdbms
+cargo run -p backend_service
 ```
 
 ### 3. Verify Service is Running

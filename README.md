@@ -89,6 +89,39 @@ cargo build --release
 ./target/release/backend-service --db ./mydb --port 8080
 ```
 
+### Using Docker Compose
+
+The fastest way to get started with all services:
+
+```bash
+# Build and start all services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (data loss!)
+docker compose down -v
+```
+
+**Services started:**
+- `rdbmsd` - TCP server on port 5432
+- `backend-service` - REST API on port 8080
+- `db-init` - Database initialization (runs once)
+
+**Data persistence:**
+- Database stored in `rdbms_data` Docker volume
+
+**Note:** The `db-init` service runs on startup but doesn't persist data. To reinitialize the database:
+
+```bash
+docker compose down -v
+docker compose up -d
+```
+
 ### TCP Server API
 
 The RDBMS TCP server accepts JSON-RPC style requests:

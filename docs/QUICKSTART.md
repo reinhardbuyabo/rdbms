@@ -360,29 +360,51 @@ docker run -it --rm \
 
 ### Docker Compose
 
-Create `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-
-services:
-  rdbms:
-    image: rdbms:latest
-    container_name: rdbms
-    ports:
-      - "5432:5432"  # TCP server
-    volumes:
-      - ./data:/data
-    restart: unless-stopped
-```
-
-Start the service:
+A `docker-compose.yml` is included in the repository for orchestration:
 
 ```bash
-docker-compose up -d
-docker-compose logs -f rdbms
-docker-compose down
+# Start all services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop all services
+docker compose down
+
+# Stop and remove data volumes
+docker compose down -v
 ```
+
+**Services:**
+| Service | Port | Description |
+|---------|------|-------------|
+| `rdbms-server` | 5432 | TCP server |
+| `backend-service` | 8080 | REST API |
+| `db-init` | - | Database initialization |
+
+**Initialize database with schema and seed data:**
+```bash
+# First time setup
+docker compose down -v
+docker compose up -d
+
+# The db-init service runs automatically on first start
+# To re-initialize: docker compose up -d db-init
+```
+
+**API Access:**
+```bash
+# Health check
+curl http://localhost:8080/api/health
+
+# Execute SQL
+curl -X POST http://localhost:8080/api/sql \
+  -H "Content-Type: application/json" \
+  -d '{"sql":"CREATE TABLE test (id INT, name TEXT)"}'
+```
+
+**Note:** The `db-init` service uses `python3 /usr/local/bin/docker-init.py` (a Python-based initializer) to execute SQL files from the `db/` directory on startup.
 
 ---
 

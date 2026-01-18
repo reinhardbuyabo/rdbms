@@ -27,7 +27,7 @@ RUN cargo build --release -p backend_service
 FROM alpine:3.19 AS runtime
 
 # Install runtime dependencies
-RUN apk add --no-cache openssl ca-certificates netcat-openbsd bash
+RUN apk add --no-cache openssl ca-certificates netcat-openbsd bash curl python3
 
 # Create non-root user
 RUN addgroup -g 1000 app && \
@@ -36,10 +36,13 @@ RUN addgroup -g 1000 app && \
 # Create data directory (parent of database file)
 RUN mkdir -p /data && chown -R app:app /data
 
-# Copy binaries from builder
-COPY --from=builder /app/target/release/rdbmsd /usr/local/bin/
-COPY --from=builder /app/target/release/rdbms /usr/local/bin/
-COPY --from=builder /app/target/release/backend-service /usr/local/bin/
+# Copy the appropriate binary based on build arg
+ARG SERVICE_BINARY=rdbmsd
+COPY --from=builder /app/target/release/${SERVICE_BINARY} /usr/local/bin/
+
+# Copy Python init script for db-init service
+COPY --from=builder /app/scripts/docker_init.py /usr/local/bin/docker-init.py
+COPY --from=builder /app/scripts/docker-init.sh /docker-init.sh
 
 # Switch to non-root user
 USER app
@@ -72,7 +75,7 @@ case "$SERVICE" in
         ;;
     api)
         echo "Starting RDBMS REST API on port 8080..."
-        exec backend-service --db "$DB_PATH" --port 8080
+        exec backend_service --db "$DB_PATH" --port 8080
         ;;
     *)
         echo "Unknown service mode: $SERVICE"
