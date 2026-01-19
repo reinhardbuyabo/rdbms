@@ -21,7 +21,7 @@ use crate::handlers::{
     abort_transaction, begin_transaction, commit_transaction, confirm_order, create_event,
     create_order, create_ticket_type, delete_event, delete_ticket_type, execute_sql, get_event,
     get_order, health, list_events, list_orders, list_ticket_types, list_tickets, publish_event,
-    update_event, update_ticket_type,
+    update_event, update_ticket_type, update_user_role,
 };
 
 #[derive(Parser, Debug)]
@@ -65,6 +65,27 @@ async fn main() -> AnyhowResult<()> {
     println!("Starting RDBMS Backend Service");
     println!("Database path: {:?}", db_path);
     println!("Listening on: {}:{}", bind, port);
+
+    // Debug: Print environment variables (mask secrets)
+    println!("\n=== Environment Debug ===");
+    println!(
+        "GOOGLE_CLIENT_ID: {}",
+        std::env::var("GOOGLE_CLIENT_ID").unwrap_or_else(|_| "NOT SET".to_string())
+    );
+    println!(
+        "GOOGLE_REDIRECT_URI: {}",
+        std::env::var("GOOGLE_REDIRECT_URI")
+            .unwrap_or_else(|_| "NOT SET (using default)".to_string())
+    );
+    println!(
+        "JWT_SECRET: {}",
+        if std::env::var("JWT_SECRET").is_ok() {
+            "SET (hidden)"
+        } else {
+            "NOT SET"
+        }
+    );
+    println!("=========================\n");
 
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent).context("create db directory")?;
@@ -110,6 +131,10 @@ async fn main() -> AnyhowResult<()> {
                     .route("/users/me", web::get().to(get_me))
                     .route("/users/me/role", web::post().to(update_role))
                     .route("/users/me", web::patch().to(update_profile))
+                    .route(
+                        "/admin/users/{user_id}/role",
+                        web::post().to(update_user_role),
+                    )
                     .route("/events", web::post().to(create_event))
                     .route("/events", web::get().to(list_events))
                     .route("/events/{event_id}", web::get().to(get_event))
