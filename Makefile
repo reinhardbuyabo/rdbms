@@ -1,4 +1,4 @@
-.PHONY: help build build-release test test-all clean run-repl run-server run-backend-service run-docker stop-docker docker-compose-build docker-compose-up docker-compose-up-with-init docker-compose-down docker-compose-logs docker-compose-logs-service docker-compose-restart docker-compose-clean docs install-systemd db-init db-init-api db-reset
+.PHONY: help build build-release test test-all clean run-repl run-server run-backend-service run-docker stop-docker docker-compose-build docker-compose-up docker-compose-up-with-init docker-compose-down docker-compose-logs docker-compose-logs-service docker-compose-restart docker-compose-clean docs install-systemd db-init db-init-api db-reset frontend-build-dev frontend-build-prod frontend-run-dev docker-compose-frontend-build docker-compose-frontend-up docker-compose-frontend-down
 
 # Default settings
 DB_PATH ?= ./data.db
@@ -28,6 +28,15 @@ help:
 	@echo "  make run-server PORT=5432 DB_PATH=/var/lib/rdbms/db.db"
 	@echo "                      - Start server with custom settings"
 	@echo "  make run-backend-service  - Start backend-service (REST API for frontend)"
+	@echo ""
+	@echo "Frontend Commands:"
+	@echo "  make frontend-build-dev   - Build frontend development Docker image"
+	@echo "  make frontend-build-prod  - Build frontend production Docker image"
+	@echo "  make frontend-run-dev     - Run frontend dev server (port 5173)"
+	@echo "  make frontend-stop        - Stop frontend containers"
+	@echo "  make docker-compose-frontend-build - Build frontend with docker-compose"
+	@echo "  make docker-compose-frontend-up   - Start frontend with docker-compose"
+	@echo "  make docker-compose-frontend-down - Stop frontend docker-compose services"
 	@echo ""
 	@echo "Database Initialization:"
 	@echo "  make db-init        - Initialize DB with schema and seed data"
@@ -103,9 +112,11 @@ run-server-release: build-release
 
 # Run Backend Service (REST API for frontend)
 run-backend-service: build
-	@echo "$(GREEN)Starting backend-service on port $(PORT)$(NC)"
-	@echo "$(GREEN)Database: $(DB_PATH)$(NC)"
-	@DB_PATH=$(DB_PATH) PORT=$(PORT) cargo run -p backend_service
+	@echo "Loading environment from /home/reinhard/jan-capstone/.env"
+	@(set -a && . /home/reinhard/jan-capstone/.env && set +a && sh -c 'echo "GOOGLE_CLIENT_ID: $$(echo "$$GOOGLE_CLIENT_ID" | cut -c1-20)..." && echo "JWT_SECRET: $$(echo "$$JWT_SECRET" | cut -c1-10)..."')
+	@echo "Starting backend-service on port $(PORT)"
+	@echo "Database: $(DB_PATH)"
+	@(set -a && . /home/reinhard/jan-capstone/.env && set +a && DB_PATH=$(DB_PATH) PORT=$(PORT) cargo run -p backend_service)
 
 run-backend-service-release: build-release
 	@echo "$(GREEN)Starting backend-service on port $(PORT)$(NC)"
@@ -254,3 +265,45 @@ install:
 	@cp target/release/backend_service /usr/local/bin/backend-service 2>/dev/null || echo "Run 'make build-release' first"
 	@echo "$(GREEN)Installed!$(NC)"
 	@echo "Run with: rdbms --help, rdbmsd --help, or backend-service --help"
+
+# Frontend build commands
+frontend-build-dev:
+	@echo "$(YELLOW)Building frontend development image...$(NC)"
+	@docker build -t eventify:frontend-dev services/frontend --target development
+
+frontend-build-prod:
+	@echo "$(YELLOW)Building frontend production image...$(NC)"
+	@docker build -t eventify:frontend-prod services/frontend --target production
+
+frontend-run-dev:
+	@echo "$(YELLOW)Starting frontend development server...$(NC)"
+	@docker run -d \
+		--name eventify-frontend-dev \
+		-p 5173:5173 \
+		-v $(PWD)/services/frontend:/app \
+		-v /app/node_modules \
+		-e VITE_API_BASE_URL=http://localhost:8080 \
+		eventify:frontend-dev
+	@echo "$(GREEN)Frontend dev server running at localhost:5173$(NC)"
+
+frontend-stop:
+	@echo "$(YELLOW)Stopping frontend containers...$(NC)"
+	@docker stop eventify-frontend-dev 2>/dev/null || true
+	@docker rm eventify-frontend-dev 2>/dev/null || true
+	@echo "$(GREEN)Frontend containers stopped$(NC)"
+
+# Docker Compose frontend commands
+docker-compose-frontend-build:
+	@echo "$(YELLOW)Building frontend with docker-compose...$(NC)"
+	@docker compose build frontend-dev frontend
+
+docker-compose-frontend-up:
+	@echo "$(YELLOW)Starting frontend services with docker-compose...$(NC)"
+	@docker compose up -d frontend-dev
+	@echo "$(GREEN)Frontend dev server running at localhost:5173$(NC)"
+
+docker-compose-frontend-down:
+	@echo "$(YELLOW)Stopping frontend Docker Compose services...$(NC)"
+	@docker compose stop frontend-dev frontend
+	@docker compose rm -f frontend-dev frontend 2>/dev/null || true
+	@echo "$(GREEN)Frontend services stopped$(NC)"
