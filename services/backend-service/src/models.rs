@@ -43,6 +43,8 @@ pub enum UserRole {
     CUSTOMER,
     #[serde(rename = "ORGANIZER")]
     ORGANIZER,
+    #[serde(rename = "ADMIN")]
+    ADMIN,
 }
 
 impl std::fmt::Display for UserRole {
@@ -50,6 +52,25 @@ impl std::fmt::Display for UserRole {
         match self {
             UserRole::CUSTOMER => write!(f, "CUSTOMER"),
             UserRole::ORGANIZER => write!(f, "ORGANIZER"),
+            UserRole::ADMIN => write!(f, "ADMIN"),
+        }
+    }
+}
+
+impl UserRole {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "ADMIN" => UserRole::ADMIN,
+            "ORGANIZER" => UserRole::ORGANIZER,
+            _ => UserRole::CUSTOMER,
+        }
+    }
+
+    pub fn can_grant_role(&self, target_role: &UserRole) -> bool {
+        match self {
+            UserRole::ADMIN => true,
+            UserRole::ORGANIZER => *target_role == UserRole::CUSTOMER,
+            UserRole::CUSTOMER => false,
         }
     }
 }

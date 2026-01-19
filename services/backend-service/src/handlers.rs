@@ -1,4 +1,4 @@
-use actix_web::{error::InternalError, web, HttpRequest, HttpResponse, Result};
+use actix_web::{HttpRequest, HttpResponse, Result, error::InternalError, web};
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Deserialize;
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::auth::{create_tables, load_user_by_id};
+use crate::auth::{check_dev_secret, create_tables, escape_sql_string, load_user_by_id};
 use crate::jwt::JwtService;
 use crate::models::*;
 use db::printer::ReplOutput;
@@ -1658,36 +1658,40 @@ pub async fn update_user_role(
     data: web::Data<AppState>,
     req_http: HttpRequest,
 ) -> Result<HttpResponse> {
-    let dev_secret = std::env::var("DEV_SECRET").unwrap_or_default();
+    let dev_secret_header = req_http
+        .headers()
+        .get("X-Dev-Secret")
+        .and_then(|h| h.to_str().ok());
 
-    let is_dev_request = dev_secret == "development"
-        || req_http
-            .headers()
-            .get("X-Dev-Secret")
-            .and_then(|h| h.to_str().ok())
-            == Some("development");
+    let is_dev_request = check_dev_secret(dev_secret_header);
 
-    if !is_dev_request {
-        let (_, _) = match extract_user_from_request(&req_http, &data).await {
-            Ok(u) => u,
-            Err(e) => return Err(e),
-        };
+    let requester_role;
+
+    if is_dev_request {
+        requester_role = UserRole::ADMIN;
+    } else {
+        let (_, requester) = extract_user_from_request(&req_http, &data)
+            .await
+            .map_err(|e| InternalError::new(e, actix_web::http::StatusCode::UNAUTHORIZED))?;
+        requester_role = requester.role;
     }
 
-    let valid_role = match req.role.to_uppercase().as_str() {
-        "ORGANIZER" => "ORGANIZER",
-        "CUSTOMER" => "CUSTOMER",
-        _ => {
-            return Ok(HttpResponse::BadRequest()
-                .json(json!({"error": "VALIDATION_ERROR", "message": "Role must be ORGANIZER or CUSTOMER"})));
-        }
-    };
+    let target_role = UserRole::from_str(&req.role);
+
+    if !requester_role.can_grant_role(&target_role) {
+        return Ok(HttpResponse::Forbidden().json(json!({
+            "error": "FORBIDDEN",
+            "message": "You do not have permission to assign this role"
+        })));
+    }
+
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
+    let escaped_role = escape_sql_string(&target_role.to_string());
+    let escaped_user_id = escape_sql_string(&req.user_id.to_string());
 
     let update_sql = format!(
         "UPDATE users SET role = '{}', updated_at = '{}' WHERE id = {}",
-        valid_role,
-        Utc::now().format("%Y-%m-%d %H:%M:%S"),
-        req.user_id
+        escaped_role, now, escaped_user_id
     );
 
     let mut engine = data.engine.lock();
@@ -1697,8 +1701,4 @@ pub async fn update_user_role(
             json!({"error": "UPDATE_ERROR", "message": format!("Failed to update user role: {}", e)}),
         )),
     }
-}
-
-fn escape_sql_string(input: &str) -> String {
-    input.replace('\'', "''")
 }

@@ -48,8 +48,24 @@ const server = http.createServer((req, res) => {
   }
 
   let urlPath = url.split('?')[0];
-  let filePath = path.join(DIST_DIR, urlPath === '/' ? 'index.html' : urlPath);
-  
+  let normalizedPath = path.normalize(urlPath);
+
+  let filePath;
+  if (normalizedPath === '/' || normalizedPath === '.') {
+    filePath = path.join(DIST_DIR, 'index.html');
+  } else {
+    filePath = path.join(DIST_DIR, normalizedPath);
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  const distResolvedPath = path.resolve(DIST_DIR);
+
+  if (!resolvedPath.startsWith(distResolvedPath + path.sep) && resolvedPath !== distResolvedPath) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request: Invalid path');
+    return;
+  }
+
   const ext = path.extname(filePath);
   const contentType = mimeTypes[ext] || 'application/octet-stream';
   

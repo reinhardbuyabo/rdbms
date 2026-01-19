@@ -257,11 +257,19 @@ pub async fn update_role(
             })?;
 
             match role_change_req.role {
-                UserRole::ORGANIZER => {
-                    if requester.role != UserRole::ORGANIZER {
+                UserRole::ADMIN => {
+                    if requester.role != UserRole::ADMIN {
                         return Ok(HttpResponse::Forbidden().json(json!({
                             "error": "FORBIDDEN",
-                            "message": "Only organizers can assign organizer role"
+                            "message": "Only admins can assign admin role"
+                        })));
+                    }
+                }
+                UserRole::ORGANIZER => {
+                    if requester.role != UserRole::ORGANIZER && requester.role != UserRole::ADMIN {
+                        return Ok(HttpResponse::Forbidden().json(json!({
+                            "error": "FORBIDDEN",
+                            "message": "Only organizers or admins can assign organizer role"
                         })));
                     }
                 }
@@ -597,11 +605,7 @@ fn create_user(
 ) -> anyhow::Result<User> {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
 
-    let role = if google_user.email.contains("organizer") {
-        "ORGANIZER"
-    } else {
-        "CUSTOMER"
-    };
+    let role = "CUSTOMER";
 
     let insert_sql = format!(
         "INSERT INTO users (google_sub, email, name, avatar_url, role, created_at, updated_at) VALUES ('{}', '{}', {}, {}, '{}', '{}', '{}')",
@@ -653,6 +657,7 @@ async fn update_user_role(data: &AppState, user_id: i64, role: UserRole) -> anyh
     let role_str = match role {
         UserRole::CUSTOMER => "CUSTOMER",
         UserRole::ORGANIZER => "ORGANIZER",
+        UserRole::ADMIN => "ADMIN",
     };
 
     let update_sql = format!(
@@ -720,10 +725,7 @@ fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {
     let avatar_url = values[4].as_str().ok().map(|s: &str| s.to_string());
 
     let role_str = values[5].as_str()?.to_string();
-    let role = match role_str.as_str() {
-        "ORGANIZER" => UserRole::ORGANIZER,
-        _ => UserRole::CUSTOMER,
-    };
+    let role = UserRole::from_str(&role_str);
 
     let phone = values[6].as_str().ok().map(|s: &str| s.to_string());
 
@@ -763,8 +765,33 @@ fn format_value(value: &query::Value) -> String {
     }
 }
 
-fn escape_sql_string(input: &str) -> String {
+pub(crate) fn escape_sql_string(input: &str) -> String {
     input.replace('\'', "''")
+}
+
+pub fn grant_organizer_role(
+    engine: &mut db::engine::Engine,
+    target_user_id: i64,
+) -> anyhow::Result<User> {
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
+
+    let update_sql = format!(
+        "UPDATE users SET role = 'ORGANIZER', updated_at = '{}' WHERE id = {}",
+        now, target_user_id
+    );
+
+    engine.execute_sql(&update_sql)?;
+
+    load_user_by_id_locked(engine, target_user_id)
+}
+
+pub fn check_dev_secret(dev_secret_header: Option<&str>) -> bool {
+    match std::env::var("DEV_SECRET") {
+        Ok(ref secret) if !secret.is_empty() => {
+            dev_secret_header.map(|h| h == secret).unwrap_or(false)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
