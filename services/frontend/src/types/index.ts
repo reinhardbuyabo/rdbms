@@ -1,4 +1,4 @@
-export type UserRole = 'ORGANIZER' | 'CUSTOMER';
+export type UserRole = 'ADMIN' | 'ORGANIZER' | 'CUSTOMER';
 
 export type EventStatus = 'DRAFT' | 'PUBLISHED' | 'CANCELLED';
 

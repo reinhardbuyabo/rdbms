@@ -575,7 +575,7 @@ class ApiClient {
     return response.tickets;
   }
 
-  async updateUserRole(userId: string, role: 'ORGANIZER' | 'CUSTOMER'): Promise<void> {
+  async updateUserRole(userId: string, role: 'ADMIN' | 'ORGANIZER' | 'CUSTOMER'): Promise<void> {
     if (MOCK_MODE) return;
     await this.request(`/v1/admin/users/${userId}/role`, {
       method: 'POST',
