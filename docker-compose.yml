@@ -75,6 +75,45 @@ services:
     networks:
       - rdbms-network
 
+  frontend-dev:
+    build:
+      context: services/frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: eventify-frontend-dev
+    image: eventify:${DOCKER_TAG:-latest}-frontend-dev
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./services/frontend:/app
+      - /app/node_modules
+    depends_on:
+      backend-service:
+        condition: service_healthy
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8080
+    networks:
+      - rdbms-network
+    profiles:
+      - dev
+
+  frontend:
+    build:
+      context: services/frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: eventify-frontend
+    image: eventify:${DOCKER_TAG:-latest}-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      backend-service:
+        condition: service_healthy
+    environment:
+      - VITE_API_BASE_URL=http://backend-service:8080
+    networks:
+      - rdbms-network
+
 volumes:
   rdbms_data:
     driver: local

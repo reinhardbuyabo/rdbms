@@ -1,65 +1,87 @@
-# RDBMS - A Rust Transactional Database
+# Eventify - Event Ticketing Platform
 
-A lightweight, embedded RDBMS written in Rust with full ACID transaction support, B+Tree indexes, and Write-Ahead Logging.
+A full-stack event ticketing platform built with Rust (backend) and React/TypeScript (frontend). Features include Google OAuth authentication, event management, ticket sales, and shopping cart functionality.
 
 ![CI](https://github.com/reinhardbuyabo/rdbms/workflows/CI/badge.svg)
 ![License](https://img.shields.io/github/license/reinhardbuyabo/rdbms)
 ![Version](https://img.shields.io/github/v/release/reinhardbuyabo/rdbms)
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/reinhardbuyabo/rdbms?utm_source=oss&utm_medium=github&utm_campaign=reinhardbuyabo%2Frdbms&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
 ## Features
 
-- **ACID Transactions**: Full atomicity, consistency, isolation, and durability
-- **Write-Ahead Logging (WAL)**: Crash recovery with redo/undo
-- **Lock Manager**: Two-phase locking with deadlock detection
-- **B+Tree Indexes**: Composite indexes with range scan support
-- **SQL Parser**: Basic SQL support (SELECT, INSERT, UPDATE, DELETE)
-- **Blob Storage**: Large object support
-- **Multiple Access Modes**:
-  - REPL interactive mode (`rdbms`)
-  - TCP server mode (`rdbmsd`) - JSON-RPC over TCP
-  - REST API (`backend-service`) - HTTP API for frontend integration
+- **Backend (Rust)**:
+  - ACID Transactions with full transaction support
+  - Write-Ahead Logging (WAL) for crash recovery
+  - Lock Manager with deadlock detection
+  - B+Tree Indexes for efficient queries
+  - REST API for frontend integration
+
+- **Frontend (React/TypeScript)**:
+  - Modern SPA with Vite
+  - Google OAuth authentication
+  - Event browsing and management
+  - Ticket purchase with credit card validation
+  - Shopping cart with localStorage persistence
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Application                               │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   REPL CLI  │  │  TCP Server │  │    REST API Service     │  │
-│  │   (rdbms)   │  │   (rdbmsd)  │  │  (backend-service)      │  │
-│  └──────┬──────┘  └──────┬──────┘  └───────────┬─────────────┘  │
-├─────────┼────────────────┼─────────────────────┼─────────────────┤
-│         │                │                     │                 │
-│         ▼                ▼                     ▼                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                         Engine                             │  │
-│  ├───────────────────────────────────────────────────────────┤  │
-│  │  ┌───────────┐  ┌───────────┐  ┌─────────────────────────┐│  │
-│  │  │  Catalog  │  │   Lock    │  │   TransactionManager    ││  │
-│  │  │           │  │  Manager  │  │                         ││  │
-│  │  └───────────┘  └───────────┘  └─────────────────────────┘│  │
-│  │  ┌───────────┐  ┌───────────┐  ┌─────────────────────────┐│  │
-│  │  │   Query   │  │  Recovery │  │    BufferPoolManager    ││  │
-│  │  │   Engine  │  │  Manager  │  │                         ││  │
-│  │  └───────────┘  └───────────┘  └─────────────────────────┘│  │
-│  └───────────────────────────────────────────────────────────┘  │
-│         │                │                     │                 │
-│         ▼                ▼                     ▼                 │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                Storage (Disk + Buffer Pool)                │  │
-│  ├───────────────────────────────────────────────────────────┤  │
-│  │  ┌─────────────┐  ┌─────────────────────────────────────┐ │  │
-│  │  │ Page Format │  │         B+Tree Index Pages          │ │  │
-│  │  └─────────────┘  └─────────────────────────────────────┘ │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│                           ▼                                      │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                Write-Ahead Log (WAL)                       │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Eventify Platform                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                        Frontend (React/Vite)                         │   │
+│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────────┐  │   │
+│   │  │  User App   │  │  Organizer  │  │        Admin Panel          │  │   │
+│   │  │  (Browse)   │  │   (Manage)  │  │        (Dashboard)          │  │   │
+│   │  └─────────────┘  └─────────────┘  └─────────────────────────────┘  │   │
+│   │         │                │                     │                     │   │
+│   │         └────────────────┼─────────────────────┘                     │   │
+│   │                          ▼                                            │   │
+│   │  ┌─────────────────────────────────────────────────────────────────┐  │   │
+│   │  │                      REST API (HTTP)                             │  │   │
+│   │  │          GET /events, POST /orders, GET /auth/*                  │  │   │
+│   │  └───────────────────────────┬─────────────────────────────────────┘  │   │
+│   └──────────────────────────────┼────────────────────────────────────────┘   │
+│                                  │                                             │
+│   ┌──────────────────────────────┼────────────────────────────────────────┐   │
+│   │                              ▼                                         │   │
+│   │  ┌──────────────────────────────────────────────────────────────────┐ │   │
+│   │  │                    Backend Service (Rust)                         │ │   │
+│   │  ├──────────────────────────────────────────────────────────────────┤ │   │
+│   │  │  ┌───────────┐  ┌───────────┐  ┌──────────────────────────────┐  │ │   │
+│   │  │  │   Auth    │  │   Event   │  │         Order/Ticket         │  │ │   │
+│   │  │  │  Handler  │  │  Manager  │  │           Manager             │  │ │   │
+│   │  │  └─────┬─────┘  └─────┬─────┘  └───────────────┬──────────────┘  │ │   │
+│   │  │        │              │                        │                 │ │   │
+│   │  │        └──────────────┼────────────────────────┘                 │ │   │
+│   │  │                       ▼                                          │ │   │
+│   │  │  ┌────────────────────────────────────────────────────────────┐  │ │   │
+│   │  │  │                     RDBMS Engine                            │  │ │   │
+│   │  │  ├────────────────────────────────────────────────────────────┤  │ │   │
+│   │  │  │  ┌───────────┐  ┌───────────┐  ┌──────────────────────────┐│  │ │   │
+│   │  │  │  │  Catalog  │  │   Lock    │  │    TransactionManager    ││  │ │   │
+│   │  │  │  │           │  │  Manager  │  │                          ││  │ │   │
+│   │  │  │  └───────────┘  └───────────┘  └──────────────────────────┘│  │ │   │
+│   │  │  │  ┌───────────┐  ┌───────────┐  ┌──────────────────────────┐│  │ │   │
+│   │  │  │  │   Query   │  │  Recovery │  │     BufferPoolManager    ││  │ │   │
+│   │  │  │  │   Engine  │  │  Manager  │  │                          ││  │ │   │
+│   │  │  │  └───────────┘  └───────────┘  └──────────────────────────┘│  │ │   │
+│   │  │  └────────────────────────────────────────────────────────────┘  │ │   │
+│   │  │                     │              │              │               │ │   │
+│   │  │                     ▼              ▼              ▼               │ │   │
+│   │  │  ┌──────────────────────────────────────────────────────────────┐ │ │   │
+│   │  │  │              Storage Layer (Disk + Buffer Pool)              │ │ │   │
+│   │  │  └──────────────────────────────────────────────────────────────┘ │ │   │
+│   │  └──────────────────────────────────────────────────────────────────┘ │   │
+│   │                              │                                           │   │
+│   │                              ▼                                           │   │
+│   │  ┌──────────────────────────────────────────────────────────────────┐ │   │
+│   │  │              Write-Ahead Log (WAL) - Crash Recovery              │ │   │
+│   │  └──────────────────────────────────────────────────────────────────┘ │   │
+│   └───────────────────────────────────────────────────────────────────────┘   │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Quick Start
@@ -68,34 +90,24 @@ A lightweight, embedded RDBMS written in Rust with full ACID transaction support
 
 - Rust 1.70 or later
 - Cargo
+- Docker & Docker Compose
+- Node.js 20+ (for frontend development)
 
-### Building from Source
+### Option 1: Docker Compose (Recommended)
+
+The fastest way to get the full stack running:
 
 ```bash
 # Clone the repository
 git clone https://github.com/reinhardbuyabo/rdbms.git
 cd rdbms
 
-# Build all binaries
-cargo build --release
-
-# Run the REPL
-./target/release/rdbms --db ./mydb
-
-# Run as TCP server (default port 5432)
-./target/release/rdbmsd --db ./mydb --listen 0.0.0.0:5432
-
-# Run as REST API server (default port 8080)
-./target/release/backend-service --db ./mydb --port 8080
-```
-
-### Using Docker Compose
-
-The fastest way to get started with all services:
-
-```bash
 # Build and start all services
 docker compose up -d
+
+# Or with database initialization
+docker compose up -d rdbmsd backend-service
+docker compose up -d db-init
 
 # View logs
 docker compose logs -f
@@ -108,78 +120,101 @@ docker compose down -v
 ```
 
 **Services started:**
+- `frontend-dev` - Frontend dev server on port 5173 (with hot reload)
+- `frontend` - Frontend production on port 80
 - `rdbmsd` - TCP server on port 5432
 - `backend-service` - REST API on port 8080
 - `db-init` - Database initialization (runs once)
 
-**Data persistence:**
-- Database stored in `rdbms_data` Docker volume
+### Option 2: Local Development
 
-**Note:** The `db-init` service runs on startup but doesn't persist data. To reinitialize the database:
-
-```bash
-docker compose down -v
-docker compose up -d
-```
-
-### TCP Server API
-
-The RDBMS TCP server accepts JSON-RPC style requests:
-
-```json
-// Request format
-{"method": "execute", "params": ["SQL_STATEMENT"]}
-
-// Response format (success)
-{"status": "ok", "result": {...}, "error": null}
-
-// Response format (error)
-{"status": "error", "result": null, "error": "error message"}
-```
-
-**Example with Python:**
-
-```python
-import socket
-import json
-
-def execute(sql):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect(('127.0.0.1', 5432))
-    request = {"method": "execute", "params": [sql]}
-    sock.sendall(json.dumps(request).encode())
-    sock.shutdown(socket.SHUT_WR)
-    response = sock.recv(16384)
-    sock.close()
-    return json.loads(response.decode())
-
-# Usage examples
-execute("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")
-execute("INSERT INTO users VALUES (1, 'Alice')")
-execute("SELECT * FROM users")
-```
-
-**Example with netcat:**
+**Backend (Rust):**
 
 ```bash
-# Ping
-echo '{"method":"ping"}' | nc -w 2 127.0.0.1 5432
+# Build all binaries
+cargo build --release
 
-# Execute SQL
-echo '{"method":"execute","params":["SELECT * FROM users"]}' | nc -w 2 127.0.0.1 5432
+# Run the RDBMS server (TCP)
+./target/release/rdbmsd --db ./data.db --listen 0.0.0.0:5432
+
+# Run the REST API server
+./target/release/backend-service --db ./data.db --port 8080
 ```
 
-### REST API (backend-service)
-
-The backend-service provides a REST API for integration with frontend applications:
+**Frontend (React/Vite):**
 
 ```bash
-# Start the server
-./target/release/backend-service --db ./mydb --port 8080
+cd services/frontend
+
+# Install dependencies
+npm install
+
+# Start development server with hot reload
+npm run dev
+
+# Build for production
+npm run build
 ```
 
-**Endpoints:**
+## Frontend Development
+
+### Commands
+
+```bash
+cd services/frontend
+
+# Development mode with hot reload
+npm run dev
+
+# Development mode accessible externally
+npm run dev -- --host 0.0.0.0
+
+# Type checking
+npm run typecheck
+
+# Linting
+npm run lint
+
+# Build for production
+npm run build
+
+# Preview production build locally
+npm run preview
+```
+
+### Docker Frontend Commands
+
+```bash
+# Build development image
+make frontend-build-dev
+
+# Build production image
+make frontend-build-prod
+
+# Run dev server
+make frontend-run-dev
+
+# Stop frontend containers
+make frontend-stop
+
+# Using docker-compose
+make docker-compose-frontend-build
+make docker-compose-frontend-up
+make docker-compose-frontend-down
+```
+
+### Environment Variables
+
+Create a `.env` file in `services/frontend/`:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8080
+VITE_GOOGLE_CLIENT_ID=your-google-client-id
+```
+
+## Backend API Reference
+
+### REST API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -192,379 +227,68 @@ The backend-service provides a REST API for integration with frontend applicatio
 | GET | /auth/google/callback | OAuth callback handler |
 | GET | /me | Get current user profile (requires JWT) |
 
-#### Google OAuth Authentication
+### OAuth Authentication
 
-The backend-service supports Google OAuth 2.0 authentication for securing API endpoints.
+The backend-service supports Google OAuth 2.0 authentication.
 
-**Configuration (Environment Variables):**
+**Configuration:**
 
 ```bash
-# Required for Google OAuth
 export GOOGLE_CLIENT_ID="your-google-client-id.apps.googleusercontent.com"
 export GOOGLE_CLIENT_SECRET="your-google-client-secret"
 export GOOGLE_REDIRECT_URI="http://localhost:8080/auth/google/callback"
-
-# Required for JWT
-export JWT_SECRET="your-super-secret-key-change-in-production"
-export JWT_TTL_SECONDS="3600"  # Token expiration time
+export JWT_SECRET="your-super-secret-key"
+export JWT_TTL_SECONDS="3600"
 ```
 
-**Setup Steps:**
-
-1. Create a project in [Google Cloud Console](https://console.cloud.google.com/)
-2. Enable the Google OAuth 2.0 API
-3. Create OAuth 2.0 credentials (Web application type)
-4. Add authorized redirect URI: `http://localhost:8080/auth/google/callback`
-5. Copy the Client ID and Client Secret
-
-**OAuth Flow (Authorization Code Flow):**
-
-```bash
-# Step 1: Redirect user to Google
-# Visit: http://localhost:8080/auth/google/start
-# User will be redirected to Google for authentication
-
-# Step 2: After successful auth, Google redirects to:
-# http://localhost:8080/auth/google/callback?code=AUTHORIZATION_CODE
-
-# Step 3: Server exchanges code for tokens, creates/updates user, returns JWT
-# Response:
-# {
-#   "token": "eyJhbGciOiJIUzI1NiIs...",
-#   "user": {
-#     "id": 1,
-#     "google_sub": "123456789",
-#     "email": "user@gmail.com",
-#     "name": "User Name",
-#     "avatar_url": "https://...",
-#     "created_at": "2024-01-01T00:00:00Z",
-#     "updated_at": "2024-01-01T00:00:00Z"
-#   }
-# }
-
-# Step 4: Use JWT to access protected endpoints
-curl http://localhost:8080/me \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-```
-
-**Users Table Schema:**
-
-The backend automatically creates a `users` table on first OAuth login:
-
-```sql
-CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    google_sub TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    name TEXT,
-    avatar_url TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-)
-```
-
-**Example with curl:**
-
-```bash
-# Start OAuth flow (get redirect URL)
-curl http://localhost:8080/auth/google/start
-
-# After Google redirect with code, get token and user info
-# (browser handles this automatically in web app)
-
-# Access protected endpoint
-curl http://localhost:8080/me \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN"
-
-# Response (401 without valid token):
-# {"error":"AUTH_REQUIRED","message":"Authorization header with Bearer token required"}
-
-# Response (401 with invalid token):
-# {"error":"INVALID_TOKEN","message":"Invalid token: ..."}
-
-# Success response:
-# {"user":{"id":1,"google_sub":"...","email":"...","name":"...","avatar_url":"...","created_at":"...","updated_at":"..."}}
-```
-
-**Example with curl:**
-
-```bash
-# Health check
-curl http://localhost:8080/api/health
-
-# Execute SQL
-curl -X POST http://localhost:8080/api/sql \
-  -H "Content-Type: application/json" \
-  -d '{"sql":"CREATE TABLE users (id INT PRIMARY KEY, name TEXT)"}'
-
-# Insert data
-curl -X POST http://localhost:8080/api/sql \
-  -H "Content-Type: application/json" \
-  -d '{"sql":"INSERT INTO users VALUES (1, '\''Alice'\'')"}'
-
-# Query data
-curl -X POST http://localhost:8080/api/sql \
-  -H "Content-Type: application/json" \
-  -d '{"sql":"SELECT * FROM users"}'
-```
-
-**Transaction example:**
-
-```bash
-# Begin transaction
-TX_ID=$(curl -s -X POST http://localhost:8080/api/tx/begin | jq -r '.result.tx_id')
-
-# Execute operations within transaction
-curl -X POST http://localhost:8080/api/sql \
-  -H "Content-Type: application/json" \
-  -d "{\"sql\":\"UPDATE users SET name='Bob' WHERE id=1\", \"tx_id\":\"$TX_ID\"}"
-
-# Commit transaction
-curl -X POST http://localhost:8080/api/tx/$TX_ID/commit
-
-# Or abort
-# curl -X POST http://localhost:8080/api/tx/$TX_ID/abort
-```
-
-### Using Docker
-
-```bash
-# Build the image
-docker build -t rdbms:latest .
-
-# Run the server
-docker run -d \
-  --name rdbms \
-  -p 5432:5432 \
-  -v /path/to/data:/data \
-  rdbms:latest
-
-# Connect to the server
-docker exec -it rdbms rdbms --db /data
-```
-
-### Using Docker Compose
-
-```yaml
-version: '3.8'
-
-services:
-  rdbms:
-    image: docker.io/reinhardb/rdbms:latest
-    ports:
-      - "5432:5432"
-    volumes:
-      - ./data:/data
-    environment:
-      - RDBMS_DATA_DIR=/data
-    restart: unless-stopped
-```
-
-## Usage
-
-### REPL Mode
-
-```
-$ ./target/release/rdbms --db ./mydb
-RDBMS REPL v0.4.0
-Using database file: ./mydb
-
-rdbms> CREATE TABLE users (id INT PRIMARY KEY, name TEXT, email TEXT);
-OK
-
-rdbms> INSERT INTO users VALUES (1, 'Alice', 'alice@example.com');
-INSERT 0 1
-
-rdbms> SELECT * FROM users;
-+----+-------+------------------+
-| id | name  | email            |
-+----+-------+------------------+
-| 1  | Alice | alice@example.com|
-+----+-------+------------------+
-(1 row)
-
-rdbms> EXIT
-```
-
-### TCP Server Mode
-
-The TCP server accepts JSON-RPC style requests:
-
-```json
-// Request: Ping
-{"method": "ping"}
-
-// Response
-{"status": "ok", "result": {"version": "0.4.0"}, "error": null}
-
-// Request: Execute SQL (no result set)
-{"method": "execute", "params": ["CREATE TABLE t (id INT)"]}
-
-// Request: Query SQL (returns rows)
-{"method": "execute", "params": ["SELECT * FROM t"]}
-```
-
-Example using netcat:
-
-```bash
-echo '{"method": "ping"}' | nc localhost 5432
-echo '{"method": "execute", "params": ["SELECT 1 as value"]}' | nc localhost 5432
-```
-
-### Using Make Commands
-
-```bash
-# Build all binaries
-make build-release
-
-# Run tests
-make test
-
-# Run REPL
-make run-repl
-
-# Run TCP server
-make run-server
-
-# Run REST API server
-make run-backend-service
-
-# Build and run Docker image
-make docker-build
-make docker-run
-```
-
-### Programmatic Usage
-
-```rust
-use db::Engine;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let engine = Engine::new("./mydb")?;
-
-    // Execute DDL/DML
-    engine.execute("CREATE TABLE users (id INT PRIMARY KEY, name TEXT)")?;
-
-    // Query data
-    let rows = engine.query("SELECT * FROM users")?;
-    for row in rows {
-        println!("{:?}", row);
-    }
-
-    Ok(())
-}
-```
-
-## Configuration
-
-### Command Line Options
-
-#### REPL (`rdbms`)
-```
-Usage: rdbms [OPTIONS]
-
-Options:
-  --db <PATH>      Database directory [default: data]
-  --help           Print help
-```
-
-#### Server (`rdbmsd`)
-```
-Usage: rdbmsd [OPTIONS]
-
-Options:
-  --db <PATH>        Database file [default: ./data.db]
-  --listen <ADDR>    Listen address [default: 0.0.0.0:5432]
-  --workers <N>      Number of worker threads (optional)
-  --help             Print help
-```
-
-#### REST API (`backend-service`)
-```
-Usage: backend-service [OPTIONS]
-
-Options:
-  -d, --db <PATH>     Database file [default: ./data.db]
-  -p, --port <PORT>   Port to listen on [default: 8080]
-  --bind <ADDR>       Bind address [default: 0.0.0.0]
-  --help              Print help
-```
-
-## Supported SQL
-
-### Data Definition
-
-```sql
-CREATE TABLE table_name (
-    column_name data_type [constraints],
-    ...
-);
-
-DROP TABLE table_name;
-
-ALTER TABLE table_name ADD COLUMN column_name data_type;
-ALTER TABLE table_name RENAME TO new_name;
-ALTER TABLE table_name DROP COLUMN column_name;
-```
-
-### Data Manipulation
-
-```sql
-INSERT INTO table_name VALUES (value1, value2, ...);
-INSERT INTO table_name (col1, col2) VALUES (v1, v2);
-
-UPDATE table_name SET col = value WHERE condition;
-
-DELETE FROM table_name WHERE condition;
-
-SELECT * FROM table_name [WHERE condition] [ORDER BY col] [LIMIT n];
-```
-
-### Indexes
-
-```sql
-CREATE INDEX index_name ON table_name (column_name);
-CREATE UNIQUE INDEX index_name ON table_name (column_name);
-CREATE PRIMARY KEY ON table_name (column_name);
-```
-
-### Transactions
-
-```sql
-BEGIN;
--- Your operations
-COMMIT;
-
--- Or rollback
-ROLLBACK;
-```
+**OAuth Flow:**
+
+1. Visit `/auth/google/start` to initiate OAuth flow
+2. User authenticates with Google
+3. Google redirects to `/auth/google/callback?code=AUTHORIZATION_CODE`
+4. Server exchanges code for tokens, creates/updates user, returns JWT
 
 ## Project Structure
 
 ```
-rdbms/
-├── Cargo.toml                 # Workspace manifest
+/home/reinhard/jan-capstone/
+├── Cargo.toml                 # Rust workspace manifest
 ├── Cargo.lock                 # Dependency lockfile
-├── Dockerfile                 # Container image definition
+├── Dockerfile                 # Backend container image
 ├── Makefile                   # Development commands
 ├── README.md                  # This file
-├── crates/
+├── docker-compose.yml         # Full stack orchestration
+│
+├── crates/                    # Rust crates
 │   ├── common/               # Shared utilities
 │   ├── db/                   # Database engine (CLI, server)
 │   ├── query/                # Query processor (SQL, execution)
 │   ├── storage/              # Storage layer (buffer pool, disk)
 │   ├── txn/                  # Transaction manager (locks, ACID)
 │   └── wal/                  # Write-Ahead Log
+│
 ├── services/
-│   └── backend-service/      # REST API service (HTTP)
+│   ├── backend-service/      # REST API service (Rust/Actix-web)
+│   └── frontend/             # React/Vite frontend (TypeScript)
+│       ├── src/
+│       │   ├── components/   # React components
+│       │   ├── pages/        # Page components
+│       │   ├── context/      # React context (Auth, Cart)
+│       │   ├── lib/          # Utilities
+│       │   └── api/          # API client
+│       ├── Dockerfile        # Frontend container image
+│       ├── nginx.conf        # Production nginx config
+│       └── package.json      # Node dependencies
+│
 ├── packaging/
 │   └── systemd/              # Systemd service files
 ├── docs/                     # Documentation
-├── .github/
-│   └── workflows/
-│       └── ci.yml            # CI/CD pipeline
 └── tests/                    # Integration tests
 ```
+
+## Supported SQL
+
+See [docs/SQL.md](docs/SQL.md) for full SQL syntax reference.
 
 ## Contributing
 
@@ -583,3 +307,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [Rust](https://www.rust-lang.org/) - Systems programming language
 - [tokio](https://tokio.rs/) - Async runtime
 - [parking_lot](https://github.com/Amanieu/parking_lot) - Synchronization primitives
+- [React](https://react.dev/) - UI framework
+- [Vite](https://vitejs.dev/) - Build tool
+- [Actix-web](https://actix.rs/) - Rust web framework

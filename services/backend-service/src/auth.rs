@@ -14,7 +14,48 @@ use query::Tuple;
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_USER_INFO_URL: &str = "https://www.googleapis.com/oauth2/v2/userinfo";
 
-pub async fn google_auth_start() -> Result<HttpResponse> {
+pub async fn google_auth_start(data: web::Data<AppState>) -> Result<HttpResponse> {
+    let query_string = std::env::var("MOCK_MODE").unwrap_or_default();
+
+    if query_string == "true" {
+        let frontend_url =
+            std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+        let mock_user_info = GoogleUserInfo {
+            sub: "1".to_string(),
+            email: "test@example.com".to_string(),
+            name: Some("Test User".to_string()),
+            picture: None,
+            email_verified: Some(true),
+        };
+
+        let user = upsert_user(&data, &mock_user_info).await.map_err(|e| {
+            actix_web::error::ErrorInternalServerError(format!("Failed to upsert mock user: {}", e))
+        })?;
+
+        let mock_token = create_mock_token(
+            user.id.unwrap(),
+            &user.email,
+            &user.name.unwrap_or_default(),
+            &format!("{}", user.role),
+        )
+        .map_err(|e| {
+            actix_web::error::ErrorInternalServerError(format!("Failed to create token: {}", e))
+        })?;
+
+        let redirect_url = format!("{}/auth-callback?token={}", frontend_url, mock_token);
+
+        let sanitized_url = sanitize_redirect_url(&redirect_url);
+        log::debug!(
+            "Mock auth: redirecting to {}",
+            &sanitized_url[..100.min(sanitized_url.len())]
+        );
+
+        return Ok(HttpResponse::Found()
+            .append_header(("Location", redirect_url))
+            .finish());
+    }
+
     let client_id = std::env::var("GOOGLE_CLIENT_ID")
         .map_err(|_| actix_web::error::ErrorInternalServerError("GOOGLE_CLIENT_ID not set"))?;
 
@@ -30,6 +71,62 @@ pub async fn google_auth_start() -> Result<HttpResponse> {
     Ok(HttpResponse::Found()
         .append_header(("Location", auth_url))
         .finish())
+}
+
+fn create_mock_token(user_id: i64, email: &str, name: &str, role: &str) -> anyhow::Result<String> {
+    use chrono::{Duration, Utc};
+    use jsonwebtoken::{encode, EncodingKey, Header};
+
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| anyhow!("JWT_SECRET environment variable not set"))?;
+
+    let exp = Utc::now() + Duration::hours(24);
+    let iat = Utc::now();
+
+    let claims = serde_json::json!({
+        "sub": user_id.to_string(),
+        "email": email,
+        "name": name,
+        "role": role,
+        "exp": exp.timestamp(),
+        "iat": iat.timestamp(),
+    });
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(jwt_secret.as_bytes()),
+    )
+    .map_err(|e| anyhow!("Failed to encode JWT: {}", e))?;
+
+    Ok(token)
+}
+
+fn sanitize_redirect_url(url: &str) -> String {
+    if let Some(q_pos) = url.find('?') {
+        let base = &url[..q_pos];
+        let query = &url[q_pos..];
+        let sensitive_params = ["token", "access_token", "id_token", "auth_token"];
+        let mut sanitized_query = query.to_string();
+        for param in sensitive_params {
+            let pattern = format!("{}=", param);
+            while let Some(idx) = sanitized_query.find(&pattern) {
+                if let Some(end_idx) = sanitized_query[idx..].find('&') {
+                    sanitized_query.replace_range(idx..idx + end_idx, "");
+                } else if let Some(amp_idx) = sanitized_query[idx..].find('&') {
+                    sanitized_query.replace_range(idx..idx + amp_idx, "");
+                } else {
+                    sanitized_query.replace_range(idx.., "");
+                    break;
+                }
+            }
+        }
+        format!("{}?[REDACTED]", base)
+    } else if let Some(hash_pos) = url.find('#') {
+        format!("{}#[REDACTED]", &url[..hash_pos])
+    } else {
+        url.to_string()
+    }
 }
 
 pub async fn google_auth_callback(
@@ -74,15 +171,41 @@ pub async fn google_auth_callback(
         .unwrap_or(3600);
 
     let jwt_service = JwtService::new(&jwt_secret);
+    let user_role = format!("{}", user.role);
     let token = jwt_service
-        .generate_token(&user.id.unwrap().to_string(), &user.email, jwt_ttl)
+        .generate_token(
+            &user.id.unwrap().to_string(),
+            &user.email,
+            &user_role,
+            jwt_ttl,
+        )
         .map_err(|e| {
             actix_web::error::ErrorInternalServerError(format!("Failed to generate JWT: {}", e))
         })?;
 
-    let response = AuthResponse { token, user };
+    // Clone token and user for the redirect
+    let token_clone = token.clone();
+    let _user_id = user.id.unwrap_or(0);
 
-    Ok(HttpResponse::Ok().json(response))
+    // Redirect to frontend with token in URL hash
+    let frontend_url =
+        std::env::var("FRONTEND_URL").unwrap_or_else(|_| "http://localhost:5173".to_string());
+
+    let redirect_url = format!("{}/auth-callback?token={}", frontend_url, token_clone);
+
+    let redirect_preview = if redirect_url.len() > 50 {
+        &redirect_url[..50]
+    } else {
+        &redirect_url
+    };
+    log::debug!("Redirecting to frontend: {}", redirect_preview);
+
+    // Create response for logging (optional)
+    let _response = AuthResponse { token, user };
+
+    Ok(HttpResponse::Found()
+        .append_header(("Location", redirect_url))
+        .finish())
 }
 
 pub async fn get_me(req: HttpRequest, data: web::Data<AppState>) -> Result<HttpResponse> {
@@ -166,11 +289,19 @@ pub async fn update_role(
             })?;
 
             match role_change_req.role {
-                UserRole::ORGANIZER => {
-                    if requester.role != UserRole::ORGANIZER {
+                UserRole::ADMIN => {
+                    if requester.role != UserRole::ADMIN {
                         return Ok(HttpResponse::Forbidden().json(json!({
                             "error": "FORBIDDEN",
-                            "message": "Only organizers can assign organizer role"
+                            "message": "Only admins can assign admin role"
+                        })));
+                    }
+                }
+                UserRole::ORGANIZER => {
+                    if requester.role != UserRole::ORGANIZER && requester.role != UserRole::ADMIN {
+                        return Ok(HttpResponse::Forbidden().json(json!({
+                            "error": "FORBIDDEN",
+                            "message": "Only organizers or admins can assign organizer role"
                         })));
                     }
                 }
@@ -253,6 +384,9 @@ async fn exchange_code_for_token(code: &str) -> anyhow::Result<Value> {
     let redirect_uri = std::env::var("GOOGLE_REDIRECT_URI")
         .unwrap_or_else(|_| "http://localhost:8080/auth/google/callback".to_string());
 
+    log::debug!("Exchanging authorization code for token...");
+    log::debug!("Redirect URI: {}", redirect_uri);
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
@@ -270,15 +404,27 @@ async fn exchange_code_for_token(code: &str) -> anyhow::Result<Value> {
         .await
         .context("Failed to send token request")?;
 
-    let token_data: Value = response
-        .json()
+    log::debug!("Token response status: {}", response.status());
+
+    let token_text = response
+        .text()
         .await
-        .context("Failed to parse token response")?;
+        .context("Failed to read token response text")?;
+
+    let token_data: Value =
+        serde_json::from_str(&token_text).context("Failed to parse token response")?;
+
+    log::debug!("Successfully parsed token response");
 
     Ok(token_data)
 }
 
 async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserInfo> {
+    log::debug!(
+        "Fetching Google user info with token: {}...",
+        &access_token[..20.min(access_token.len())]
+    );
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
@@ -290,10 +436,27 @@ async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserIn
         .await
         .context("Failed to send user info request")?;
 
-    let user_info: GoogleUserInfo = response
-        .json()
+    log::debug!("Google user info response status: {}", response.status());
+
+    let text = response
+        .text()
         .await
-        .context("Failed to parse user info response")?;
+        .context("Failed to read user info response text")?;
+
+    log::debug!(
+        "Google user info response body length: {} bytes",
+        text.len()
+    );
+
+    let user_info: GoogleUserInfo = match serde_json::from_str(&text) {
+        Ok(info) => info,
+        Err(e) => {
+            log::error!("Serde JSON error: {}", e);
+            return Err(anyhow::anyhow!("Failed to parse user info response: {}", e));
+        }
+    };
+
+    log::debug!("Successfully parsed user info: sub={}", user_info.sub);
 
     Ok(user_info)
 }
@@ -371,6 +534,8 @@ pub fn load_user_by_id_locked(
 }
 
 pub fn create_tables(engine: &mut db::engine::Engine) -> anyhow::Result<()> {
+    log::debug!("Creating tables...");
+
     let users_sql = r#"
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -385,7 +550,9 @@ pub fn create_tables(engine: &mut db::engine::Engine) -> anyhow::Result<()> {
         )
     "#;
 
+    log::debug!("Executing users table creation...");
     engine.execute_sql(users_sql)?;
+    log::debug!("Users table created successfully");
 
     let events_sql = r#"
         CREATE TABLE IF NOT EXISTS events (
@@ -452,6 +619,16 @@ pub fn create_tables(engine: &mut db::engine::Engine) -> anyhow::Result<()> {
 
     engine.execute_sql(tickets_sql)?;
 
+    // Verify the table was created
+    let verify_sql = "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'";
+    if let Ok(db::printer::ReplOutput::Rows { rows, .. }) = engine.execute_sql(verify_sql) {
+        if let Some(row) = rows.first() {
+            let schema = row.get(0).map(|v| v.as_str().unwrap_or("")).unwrap_or("");
+            log::debug!("Users table schema: {}", schema);
+        }
+    }
+
+    log::debug!("All tables created successfully");
     Ok(())
 }
 
@@ -461,8 +638,10 @@ fn create_user(
 ) -> anyhow::Result<User> {
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
 
+    let role = "CUSTOMER";
+
     let insert_sql = format!(
-        "INSERT INTO users (google_sub, email, name, avatar_url, role, created_at, updated_at) VALUES ('{}', '{}', {}, {}, 'CUSTOMER', '{}', '{}')",
+        "INSERT INTO users (google_sub, email, name, avatar_url, role, created_at, updated_at) VALUES ('{}', '{}', {}, {}, '{}', '{}', '{}')",
         escape_sql_string(&google_user.sub),
         escape_sql_string(&google_user.email),
         google_user
@@ -475,6 +654,7 @@ fn create_user(
             .as_ref()
             .map(|p| format!("'{}'", escape_sql_string(p)))
             .unwrap_or("NULL".to_string()),
+        role,
         now,
         now
     );
@@ -507,6 +687,7 @@ async fn update_user_role(data: &AppState, user_id: i64, role: UserRole) -> anyh
     let role_str = match role {
         UserRole::CUSTOMER => "CUSTOMER",
         UserRole::ORGANIZER => "ORGANIZER",
+        UserRole::ADMIN => "ADMIN",
     };
 
     let update_sql = format!(
@@ -574,10 +755,7 @@ fn load_user_by_db_row(row: &Tuple) -> anyhow::Result<User> {
     let avatar_url = values[4].as_str().ok().map(|s: &str| s.to_string());
 
     let role_str = values[5].as_str()?.to_string();
-    let role = match role_str.as_str() {
-        "ORGANIZER" => UserRole::ORGANIZER,
-        _ => UserRole::CUSTOMER,
-    };
+    let role = UserRole::from_str(&role_str);
 
     let phone = values[6].as_str().ok().map(|s: &str| s.to_string());
 
@@ -617,8 +795,33 @@ fn format_value(value: &query::Value) -> String {
     }
 }
 
-fn escape_sql_string(input: &str) -> String {
+pub(crate) fn escape_sql_string(input: &str) -> String {
     input.replace('\'', "''")
+}
+
+pub fn grant_organizer_role(
+    engine: &mut db::engine::Engine,
+    target_user_id: i64,
+) -> anyhow::Result<User> {
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
+
+    let update_sql = format!(
+        "UPDATE users SET role = 'ORGANIZER', updated_at = '{}' WHERE id = {}",
+        now, target_user_id
+    );
+
+    engine.execute_sql(&update_sql)?;
+
+    load_user_by_id_locked(engine, target_user_id)
+}
+
+pub fn check_dev_secret(dev_secret_header: Option<&str>) -> bool {
+    match std::env::var("DEV_SECRET") {
+        Ok(ref secret) if !secret.is_empty() => {
+            dev_secret_header.map(|h| h == secret).unwrap_or(false)
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]

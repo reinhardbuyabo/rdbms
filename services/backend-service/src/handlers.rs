@@ -1,12 +1,15 @@
-use actix_web::{error::InternalError, web, HttpRequest, HttpResponse, Result};
+use actix_web::{
+    error::ErrorBadRequest, error::InternalError, web, HttpRequest, HttpResponse, Result,
+};
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::auth::{create_tables, load_user_by_id};
+use crate::auth::{check_dev_secret, create_tables, escape_sql_string, load_user_by_id};
 use crate::jwt::JwtService;
 use crate::models::*;
 use db::printer::ReplOutput;
@@ -371,6 +374,9 @@ fn load_event_by_db_row(row: &query::Tuple) -> anyhow::Result<Event> {
         status,
         created_at,
         updated_at,
+        ticket_types: None,
+        total_capacity: None,
+        total_sold: None,
     })
 }
 
@@ -557,16 +563,20 @@ pub async fn create_event(
     match engine.execute_sql(&insert_sql) {
         Ok(_) => {
             let select_sql = format!(
-                "SELECT id, organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at FROM events WHERE organizer_user_id = {} ORDER BY id DESC LIMIT 1",
+                "SELECT id, organizer_user_id, title, description, venue, location, start_time, end_time, status, created_at, updated_at FROM events WHERE organizer_user_id = {}",
                 user.id.unwrap()
             );
             match engine.execute_sql(&select_sql) {
                 Ok(ReplOutput::Rows { mut rows, .. }) => {
-                    if let Some(row) = rows.pop() {
-                        match load_event_by_db_row(&row) {
-                            Ok(event) => Ok(HttpResponse::Created().json(json!({"event": event, "message": "Event created successfully"}))),
-                            Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "PARSE_ERROR", "message": format!("Failed to parse event: {}", e)}))),
+                    let mut events = Vec::new();
+                    for row in rows.drain(..) {
+                        if let Ok(event) = load_event_by_db_row(&row) {
+                            events.push(event);
                         }
+                    }
+                    events.sort_by_key(|e| e.id);
+                    if let Some(event) = events.pop() {
+                        Ok(HttpResponse::Created().json(json!({"event": event, "message": "Event created successfully"})))
                     } else {
                         Ok(HttpResponse::InternalServerError().json(json!({"error": "CREATION_ERROR", "message": "Failed to retrieve created event"})))
                     }
@@ -609,12 +619,6 @@ pub async fn list_events(
             escape_sql_string(q)
         ));
     }
-    sql.push_str(" ORDER BY start_time ASC, id ASC");
-    if let Some(limit) = query.get("limit") {
-        if let Ok(lim) = limit.parse::<i64>() {
-            sql.push_str(&format!(" LIMIT {}", lim));
-        }
-    }
 
     match engine.execute_sql(&sql) {
         Ok(ReplOutput::Rows { mut rows, .. }) => {
@@ -624,7 +628,48 @@ pub async fn list_events(
                     events.push(event);
                 }
             }
-            Ok(HttpResponse::Ok().json(json!({"events": events, "count": events.len()})))
+
+            let ticket_sql = "SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types".to_string();
+            let mut ticket_by_event: HashMap<i64, Vec<TicketType>> = HashMap::new();
+            if let Ok(ReplOutput::Rows { mut rows, .. }) = engine.execute_sql(&ticket_sql) {
+                for row in rows.drain(..) {
+                    if let Ok(tt) = load_ticket_type_by_db_row(&row) {
+                        ticket_by_event.entry(tt.event_id).or_default().push(tt);
+                    }
+                }
+            }
+
+            for event in &mut events {
+                if let Some(id) = event.id {
+                    if let Some(tts) = ticket_by_event.get(&id) {
+                        event.ticket_types = Some(tts.clone());
+                        let event_capacity: i64 = tts.iter().map(|tt| tt.capacity).sum();
+                        event.total_capacity = Some(event_capacity);
+                    } else {
+                        event.ticket_types = Some(Vec::new());
+                        event.total_capacity = Some(0);
+                    }
+                    event.total_sold = Some(0);
+                }
+            }
+
+            let page: usize = query.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+            let limit: usize = query
+                .get("limit")
+                .and_then(|l| l.parse().ok())
+                .unwrap_or(50);
+            let page = std::cmp::max(1, page);
+            let limit = std::cmp::max(1, limit);
+            let start = page.saturating_sub(1) * limit;
+            let end = start.saturating_add(limit);
+            let total = events.len();
+            let paginated_events = events[start..std::cmp::min(end, total)].to_vec();
+            let total_pages = if limit == 0 {
+                0
+            } else {
+                (total as f64 / limit as f64).ceil() as i64
+            };
+            Ok(HttpResponse::Ok().json(json!({"data": paginated_events, "page": page, "limit": limit, "total": total, "totalPages": total_pages})))
         }
         Ok(_) => Ok(HttpResponse::InternalServerError()
             .json(json!({"error": "QUERY_ERROR", "message": "Unexpected response from database"}))),
@@ -644,50 +689,33 @@ pub async fn get_event(path: web::Path<i64>, data: web::Data<AppState>) -> Resul
                 Err(e) => return Ok(HttpResponse::InternalServerError().json(json!({"error": "QUERY_ERROR", "message": format!("Failed to load ticket types: {}", e)}))),
             };
 
-            let mut sold_map = HashMap::new();
-            let mut engine = data.engine.lock();
-            let count_sql = format!(
-                "SELECT ticket_type_id, COUNT(*) as sold FROM tickets WHERE ticket_type_id IN (SELECT id FROM ticket_types WHERE event_id = {}) AND status IN ('HELD', 'ISSUED') GROUP BY ticket_type_id",
-                event_id
-            );
-
-            match engine.execute_sql(&count_sql) {
-                Ok(ReplOutput::Rows { rows, .. }) => {
-                    for row in rows {
-                        let values = row.values();
-                        if let (Ok(tt_id), Ok(sold)) = (values[0].as_i64(), values[1].as_i64()) {
-                            sold_map.insert(tt_id, sold);
-                        }
-                    }
-                }
-                Ok(_) => {}
-                Err(_) => {}
-            }
-
             let ticket_types_with_availability: Vec<TicketTypeWithAvailability> = ticket_types
                 .into_iter()
-                .map(|tt| {
-                    let sold = sold_map.get(&tt.id.unwrap_or(0)).copied().unwrap_or(0);
-                    TicketTypeWithAvailability {
-                        id: tt.id,
-                        event_id: tt.event_id,
-                        name: tt.name,
-                        price: tt.price,
-                        capacity: tt.capacity,
-                        sold,
-                        remaining: tt.capacity - sold,
-                        sales_start: tt.sales_start,
-                        sales_end: tt.sales_end,
-                        created_at: tt.created_at,
-                        updated_at: tt.updated_at,
-                    }
+                .map(|tt| TicketTypeWithAvailability {
+                    id: tt.id,
+                    event_id: tt.event_id,
+                    name: tt.name,
+                    price: tt.price,
+                    capacity: tt.capacity,
+                    sold: 0,
+                    remaining: tt.capacity,
+                    sales_start: tt.sales_start,
+                    sales_end: tt.sales_end,
+                    created_at: tt.created_at,
+                    updated_at: tt.updated_at,
                 })
                 .collect();
 
-            let event_response = EventWithTicketTypes {
-                event,
-                ticket_types: ticket_types_with_availability,
+            let organizer_name = match load_user_by_id(&data, event.organizer_user_id).await {
+                Ok(user) => user.name.unwrap_or_else(|| "Unknown Organizer".to_string()),
+                Err(_) => "Unknown Organizer".to_string(),
             };
+
+            let event_response = json!({
+                "event": event,
+                "ticket_types": ticket_types_with_availability,
+                "organizer_name": organizer_name
+            });
             Ok(HttpResponse::Ok().json(event_response))
         }
         Err(_) => Ok(HttpResponse::NotFound()
@@ -947,14 +975,18 @@ pub async fn create_ticket_type(
 
     match engine.execute_sql(&insert_sql) {
         Ok(_) => {
-            let select_sql = format!("SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types WHERE event_id = {} ORDER BY id DESC LIMIT 1", event_id);
+            let select_sql = format!("SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types WHERE event_id = {}", event_id);
             match engine.execute_sql(&select_sql) {
                 Ok(ReplOutput::Rows { mut rows, .. }) => {
-                    if let Some(row) = rows.pop() {
-                        match load_ticket_type_by_db_row(&row) {
-                            Ok(tt) => Ok(HttpResponse::Created().json(json!({"ticket_type": tt, "message": "Ticket type created successfully"}))),
-                            Err(e) => Ok(HttpResponse::InternalServerError().json(json!({"error": "CREATION_ERROR", "message": format!("Failed to parse ticket type: {}", e)}))),
+                    let mut ticket_types = Vec::new();
+                    for row in rows.drain(..) {
+                        if let Ok(tt) = load_ticket_type_by_db_row(&row) {
+                            ticket_types.push(tt);
                         }
+                    }
+                    ticket_types.sort_by_key(|tt| tt.id);
+                    if let Some(tt) = ticket_types.pop() {
+                        Ok(HttpResponse::Created().json(json!({"ticket_type": tt, "message": "Ticket type created successfully"})))
                     } else {
                         Ok(HttpResponse::InternalServerError().json(json!({"error": "CREATION_ERROR", "message": "Failed to retrieve created ticket type"})))
                     }
@@ -1248,7 +1280,7 @@ pub async fn create_order(
     let order_id = match engine.execute_sql(&insert_order_sql) {
         Ok(_) => {
             let select_sql = format!(
-                "SELECT id FROM orders WHERE customer_user_id = {} ORDER BY id DESC LIMIT 1",
+                "SELECT id FROM orders WHERE customer_user_id = {} ORDER BY id DESC",
                 user_id
             );
             match engine.execute_sql(&select_sql) {
@@ -1591,6 +1623,60 @@ fn load_all_tickets_for_user_locked(
     }
 }
 
-fn escape_sql_string(input: &str) -> String {
-    input.replace('\'', "''")
+#[derive(Deserialize)]
+pub struct UpdateUserRoleRequest {
+    pub user_id: i64,
+    pub role: String,
+}
+
+pub async fn update_user_role(
+    req: web::Json<UpdateUserRoleRequest>,
+    data: web::Data<AppState>,
+    req_http: HttpRequest,
+) -> Result<HttpResponse> {
+    let dev_secret_header = req_http
+        .headers()
+        .get("X-Dev-Secret")
+        .and_then(|h| h.to_str().ok());
+
+    let is_dev_request = check_dev_secret(dev_secret_header);
+
+    let requester_role;
+
+    if is_dev_request {
+        requester_role = UserRole::ADMIN;
+    } else {
+        let (_, requester) = extract_user_from_request(&req_http, &data)
+            .await
+            .map_err(|e| InternalError::new(e, actix_web::http::StatusCode::UNAUTHORIZED))?;
+        requester_role = requester.role;
+    }
+
+    let target_role = UserRole::parse(&req.role).map_err(|e| {
+        ErrorBadRequest(json!({"error": "VALIDATION_ERROR", "message": e.to_string()}))
+    })?;
+
+    if !requester_role.can_grant_role(&target_role) {
+        return Ok(HttpResponse::Forbidden().json(json!({
+            "error": "FORBIDDEN",
+            "message": "You do not have permission to assign this role"
+        })));
+    }
+
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S");
+    let escaped_role = escape_sql_string(&target_role.to_string());
+    let escaped_user_id = escape_sql_string(&req.user_id.to_string());
+
+    let update_sql = format!(
+        "UPDATE users SET role = '{}', updated_at = '{}' WHERE id = {}",
+        escaped_role, now, escaped_user_id
+    );
+
+    let mut engine = data.engine.lock();
+    match engine.execute_sql(&update_sql) {
+        Ok(_) => Ok(HttpResponse::Ok().json(json!({"message": "User role updated successfully"}))),
+        Err(e) => Ok(HttpResponse::InternalServerError().json(
+            json!({"error": "UPDATE_ERROR", "message": format!("Failed to update user role: {}", e)}),
+        )),
+    }
 }

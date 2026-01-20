@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -39,15 +40,63 @@ pub struct SuccessResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum UserRole {
+    #[serde(rename = "CUSTOMER")]
     CUSTOMER,
+    #[serde(rename = "ORGANIZER")]
     ORGANIZER,
+    #[serde(rename = "ADMIN")]
+    ADMIN,
+}
+
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserRole::CUSTOMER => write!(f, "CUSTOMER"),
+            UserRole::ORGANIZER => write!(f, "ORGANIZER"),
+            UserRole::ADMIN => write!(f, "ADMIN"),
+        }
+    }
+}
+
+impl UserRole {
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s.to_uppercase().as_str() {
+            "ADMIN" => UserRole::ADMIN,
+            "ORGANIZER" => UserRole::ORGANIZER,
+            "CUSTOMER" => UserRole::CUSTOMER,
+            _ => UserRole::CUSTOMER,
+        }
+    }
+
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        match s.to_uppercase().as_str() {
+            "ADMIN" => Ok(UserRole::ADMIN),
+            "ORGANIZER" => Ok(UserRole::ORGANIZER),
+            "CUSTOMER" => Ok(UserRole::CUSTOMER),
+            _ => Err(anyhow!(
+                "Invalid role: {}. Valid roles are: ADMIN, ORGANIZER, CUSTOMER",
+                s
+            )),
+        }
+    }
+
+    pub fn can_grant_role(&self, target_role: &UserRole) -> bool {
+        match self {
+            UserRole::ADMIN => true,
+            UserRole::ORGANIZER => *target_role == UserRole::CUSTOMER,
+            UserRole::CUSTOMER => false,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EventStatus {
+    #[serde(rename = "DRAFT")]
     DRAFT,
+    #[serde(rename = "PUBLISHED")]
     PUBLISHED,
+    #[serde(rename = "CANCELLED")]
     CANCELLED,
 }
 
@@ -92,7 +141,7 @@ pub struct RoleChangeRequest {
     pub role: UserRole,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Event {
     pub id: Option<i64>,
     pub organizer_user_id: i64,
@@ -105,6 +154,12 @@ pub struct Event {
     pub status: EventStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket_types: Option<Vec<TicketType>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_capacity: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_sold: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -133,7 +188,7 @@ pub struct EventWithTicketTypes {
     pub ticket_types: Vec<TicketTypeWithAvailability>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TicketType {
     pub id: Option<i64>,
     pub event_id: i64,
@@ -253,21 +308,40 @@ pub struct OrderWithCustomer {
     pub tickets: Vec<TicketWithDetails>,
 }
 
+/// Response from Google's OAuth2 v2 userinfo endpoint.
+/// Deserializes the user profile data returned after successful authentication.
+/// Note: Google's "id" field is mapped to "sub" for consistency with JWT standards.
+/// "verified_email" is mapped to email_verified.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GoogleUserInfo {
+    /// Google user ID (mapped from "id" field in response)
+    #[serde(rename = "id")]
     pub sub: String,
+    /// User's email address
     pub email: String,
+    /// User's full name (optional)
     pub name: Option<String>,
+    /// URL to user's profile picture (optional)
     pub picture: Option<String>,
+    /// Whether the email has been verified by Google
+    #[serde(rename = "verified_email")]
     pub email_verified: Option<bool>,
 }
 
+/// JWT token claims used for authorization after verification.
+/// Contains the user identity and role for access control decisions.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
+    /// Subject (user ID) from the token
     pub sub: String,
+    /// User's email address from the token
     pub email: String,
+    /// User role for role-based access control (e.g., "ADMIN", "ORGANIZER", "CUSTOMER")
+    pub role: String,
+    /// Token expiration timestamp (seconds since Unix epoch)
     pub exp: usize,
+    /// Token issued-at timestamp (seconds since Unix epoch)
     pub iat: usize,
 }
 

@@ -16,13 +16,20 @@ impl JwtService {
         }
     }
 
-    pub fn generate_token(&self, user_id: &str, email: &str, ttl_seconds: u64) -> Result<String> {
+    pub fn generate_token(
+        &self,
+        user_id: &str,
+        email: &str,
+        role: &str,
+        ttl_seconds: u64,
+    ) -> Result<String> {
         let now = Utc::now();
         let exp = now + Duration::seconds(ttl_seconds as i64);
 
         let claims = Claims {
             sub: user_id.to_string(),
             email: email.to_string(),
+            role: role.to_string(),
             exp: exp.timestamp() as usize,
             iat: now.timestamp() as usize,
         };
@@ -49,13 +56,15 @@ mod tests {
         let jwt_service = JwtService::new("test_secret_key_12345");
         let user_id = "123";
         let email = "test@example.com";
+        let role = "CUSTOMER";
         let ttl = 3600;
 
-        let token = jwt_service.generate_token(user_id, email, ttl)?;
+        let token = jwt_service.generate_token(user_id, email, role, ttl)?;
         let claims = jwt_service.verify_token(&token)?;
 
         assert_eq!(claims.sub, user_id);
         assert_eq!(claims.email, email);
+        assert_eq!(claims.role, role);
         assert!(claims.exp > claims.iat);
 
         Ok(())
