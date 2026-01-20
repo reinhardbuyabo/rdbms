@@ -1,4 +1,6 @@
-use actix_web::{HttpRequest, HttpResponse, Result, error::InternalError, web};
+use actix_web::{
+    error::ErrorBadRequest, error::InternalError, web, HttpRequest, HttpResponse, Result,
+};
 use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Deserialize;
@@ -627,73 +629,47 @@ pub async fn list_events(
                 }
             }
 
-            let ticket_sql =
-                "SELECT event_id, id, name, price, capacity FROM ticket_types".to_string();
+            let ticket_sql = "SELECT id, event_id, name, price, capacity, sales_start, sales_end, created_at, updated_at FROM ticket_types".to_string();
             let mut ticket_by_event: HashMap<i64, Vec<TicketType>> = HashMap::new();
             if let Ok(ReplOutput::Rows { mut rows, .. }) = engine.execute_sql(&ticket_sql) {
                 for row in rows.drain(..) {
-                    let values = row.values();
-                    if let (Ok(event_id), Ok(tt_id), Ok(name), Ok(price), Ok(capacity)) = (
-                        values[0].as_i64(),
-                        values[1].as_i64(),
-                        values[2].as_str(),
-                        values[3].as_i64(),
-                        values[4].as_i64(),
-                    ) {
-                        let tt = TicketType {
-                            id: Some(tt_id),
-                            event_id,
-                            name: name.to_string(),
-                            price,
-                            capacity,
-                            sales_start: None,
-                            sales_end: None,
-                            created_at: chrono::DateTime::from_naive_utc_and_offset(
-                                chrono::NaiveDateTime::parse_from_str(
-                                    "2026-01-01 00:00:00",
-                                    "%Y-%m-%d %H:%M:%S",
-                                )
-                                .unwrap(),
-                                chrono::Utc,
-                            ),
-                            updated_at: chrono::DateTime::from_naive_utc_and_offset(
-                                chrono::NaiveDateTime::parse_from_str(
-                                    "2026-01-01 00:00:00",
-                                    "%Y-%m-%d %H:%M:%S",
-                                )
-                                .unwrap(),
-                                chrono::Utc,
-                            ),
-                        };
-                        ticket_by_event.entry(event_id).or_default().push(tt);
+                    if let Ok(tt) = load_ticket_type_by_db_row(&row) {
+                        ticket_by_event.entry(tt.event_id).or_default().push(tt);
                     }
                 }
             }
 
-            let mut total_capacity = 0i64;
             for event in &mut events {
                 if let Some(id) = event.id {
                     if let Some(tts) = ticket_by_event.get(&id) {
                         event.ticket_types = Some(tts.clone());
-                        total_capacity = tts.iter().map(|tt| tt.capacity).sum();
+                        let event_capacity: i64 = tts.iter().map(|tt| tt.capacity).sum();
+                        event.total_capacity = Some(event_capacity);
                     } else {
                         event.ticket_types = Some(Vec::new());
+                        event.total_capacity = Some(0);
                     }
-                    event.total_capacity = Some(total_capacity);
                     event.total_sold = Some(0);
                 }
             }
 
-            let page = query.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
-            let limit = query
+            let page: usize = query.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
+            let limit: usize = query
                 .get("limit")
                 .and_then(|l| l.parse().ok())
                 .unwrap_or(50);
-            let start = (page - 1) * limit;
-            let end = start + limit;
-            let paginated_events = events[start..std::cmp::min(end, events.len())].to_vec();
+            let page = std::cmp::max(1, page);
+            let limit = std::cmp::max(1, limit);
+            let start = page.saturating_sub(1) * limit;
+            let end = start.saturating_add(limit);
             let total = events.len();
-            Ok(HttpResponse::Ok().json(json!({"data": paginated_events, "page": page, "limit": limit, "total": total, "totalPages": (total as f64 / limit as f64).ceil() as i64})))
+            let paginated_events = events[start..std::cmp::min(end, total)].to_vec();
+            let total_pages = if limit == 0 {
+                0
+            } else {
+                (total as f64 / limit as f64).ceil() as i64
+            };
+            Ok(HttpResponse::Ok().json(json!({"data": paginated_events, "page": page, "limit": limit, "total": total, "totalPages": total_pages})))
         }
         Ok(_) => Ok(HttpResponse::InternalServerError()
             .json(json!({"error": "QUERY_ERROR", "message": "Unexpected response from database"}))),
@@ -1676,7 +1652,9 @@ pub async fn update_user_role(
         requester_role = requester.role;
     }
 
-    let target_role = UserRole::from_str(&req.role);
+    let target_role = UserRole::parse(&req.role).map_err(|e| {
+        ErrorBadRequest(json!({"error": "VALIDATION_ERROR", "message": e.to_string()}))
+    })?;
 
     if !requester_role.can_grant_role(&target_role) {
         return Ok(HttpResponse::Forbidden().json(json!({

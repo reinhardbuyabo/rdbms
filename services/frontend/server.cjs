@@ -48,10 +48,10 @@ const server = http.createServer((req, res) => {
   }
 
   let urlPath = url.split('?')[0];
-  let normalizedPath = path.normalize(urlPath);
+  let normalizedPath = path.normalize(urlPath).replace(/^[/\\]+/, '');
 
   let filePath;
-  if (normalizedPath === '/' || normalizedPath === '.') {
+  if (normalizedPath === '' || normalizedPath === '.') {
     filePath = path.join(DIST_DIR, 'index.html');
   } else {
     filePath = path.join(DIST_DIR, normalizedPath);
@@ -66,7 +66,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const ext = path.extname(filePath);
+  const ext = path.extname(resolvedPath);
   const contentType = mimeTypes[ext] || 'application/octet-stream';
   
   fs.readFile(filePath, (err, content) => {

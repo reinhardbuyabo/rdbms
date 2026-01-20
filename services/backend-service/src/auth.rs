@@ -38,13 +38,17 @@ pub async fn google_auth_start(data: web::Data<AppState>) -> Result<HttpResponse
             &user.email,
             &user.name.unwrap_or_default(),
             &format!("{}", user.role),
-        );
+        )
+        .map_err(|e| {
+            actix_web::error::ErrorInternalServerError(format!("Failed to create token: {}", e))
+        })?;
 
         let redirect_url = format!("{}/auth-callback?token={}", frontend_url, mock_token);
 
+        let sanitized_url = sanitize_redirect_url(&redirect_url);
         log::debug!(
             "Mock auth: redirecting to {}",
-            &redirect_url[..100.min(redirect_url.len())]
+            &sanitized_url[..100.min(sanitized_url.len())]
         );
 
         return Ok(HttpResponse::Found()
@@ -69,11 +73,12 @@ pub async fn google_auth_start(data: web::Data<AppState>) -> Result<HttpResponse
         .finish())
 }
 
-fn create_mock_token(user_id: i64, email: &str, name: &str, role: &str) -> String {
+fn create_mock_token(user_id: i64, email: &str, name: &str, role: &str) -> anyhow::Result<String> {
     use chrono::{Duration, Utc};
     use jsonwebtoken::{encode, EncodingKey, Header};
 
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "test-secret".to_string());
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| anyhow!("JWT_SECRET environment variable not set"))?;
 
     let exp = Utc::now() + Duration::hours(24);
     let iat = Utc::now();
@@ -92,9 +97,36 @@ fn create_mock_token(user_id: i64, email: &str, name: &str, role: &str) -> Strin
         &claims,
         &EncodingKey::from_secret(jwt_secret.as_bytes()),
     )
-    .unwrap_or_default();
+    .map_err(|e| anyhow!("Failed to encode JWT: {}", e))?;
 
-    token
+    Ok(token)
+}
+
+fn sanitize_redirect_url(url: &str) -> String {
+    if let Some(q_pos) = url.find('?') {
+        let base = &url[..q_pos];
+        let query = &url[q_pos..];
+        let sensitive_params = ["token", "access_token", "id_token", "auth_token"];
+        let mut sanitized_query = query.to_string();
+        for param in sensitive_params {
+            let pattern = format!("{}=", param);
+            while let Some(idx) = sanitized_query.find(&pattern) {
+                if let Some(end_idx) = sanitized_query[idx..].find('&') {
+                    sanitized_query.replace_range(idx..idx + end_idx, "");
+                } else if let Some(amp_idx) = sanitized_query[idx..].find('&') {
+                    sanitized_query.replace_range(idx..idx + amp_idx, "");
+                } else {
+                    sanitized_query.replace_range(idx.., "");
+                    break;
+                }
+            }
+        }
+        format!("{}?[REDACTED]", base)
+    } else if let Some(hash_pos) = url.find('#') {
+        format!("{}#[REDACTED]", &url[..hash_pos])
+    } else {
+        url.to_string()
+    }
 }
 
 pub async fn google_auth_callback(
@@ -626,10 +658,7 @@ fn create_user(
         now
     );
 
-    log::debug!("Insert SQL: {}", insert_sql);
-
     if let Err(e) = engine.execute_sql(&insert_sql) {
-        log::error!("Insert failed: {}", e);
         return Err(anyhow!("Failed to insert user: {}", e));
     }
 

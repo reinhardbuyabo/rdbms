@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -58,11 +59,25 @@ impl std::fmt::Display for UserRole {
 }
 
 impl UserRole {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_uppercase().as_str() {
             "ADMIN" => UserRole::ADMIN,
             "ORGANIZER" => UserRole::ORGANIZER,
+            "CUSTOMER" => UserRole::CUSTOMER,
             _ => UserRole::CUSTOMER,
+        }
+    }
+
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        match s.to_uppercase().as_str() {
+            "ADMIN" => Ok(UserRole::ADMIN),
+            "ORGANIZER" => Ok(UserRole::ORGANIZER),
+            "CUSTOMER" => Ok(UserRole::CUSTOMER),
+            _ => Err(anyhow!(
+                "Invalid role: {}. Valid roles are: ADMIN, ORGANIZER, CUSTOMER",
+                s
+            )),
         }
     }
 
