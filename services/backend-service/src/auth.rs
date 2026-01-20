@@ -33,8 +33,17 @@ pub async fn google_auth_start(data: web::Data<AppState>) -> Result<HttpResponse
             actix_web::error::ErrorInternalServerError(format!("Failed to upsert mock user: {}", e))
         })?;
 
+        let user_id = match user.id {
+            Some(id) => id,
+            None => {
+                return Err(actix_web::error::ErrorInternalServerError(
+                    "User was created but has no ID".to_string(),
+                ));
+            }
+        };
+
         let mock_token = create_mock_token(
-            user.id.unwrap(),
+            user_id,
             &user.email,
             &user.name.unwrap_or_default(),
             &format!("{}", user.role),
@@ -420,10 +429,7 @@ async fn exchange_code_for_token(code: &str) -> anyhow::Result<Value> {
 }
 
 async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserInfo> {
-    log::debug!(
-        "Fetching Google user info with token: {}...",
-        &access_token[..20.min(access_token.len())]
-    );
+    log::debug!("Fetching Google user info");
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
