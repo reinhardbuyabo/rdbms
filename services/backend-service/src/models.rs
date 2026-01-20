@@ -308,24 +308,40 @@ pub struct OrderWithCustomer {
     pub tickets: Vec<TicketWithDetails>,
 }
 
+/// Response from Google's OAuth2 v2 userinfo endpoint.
+/// Deserializes the user profile data returned after successful authentication.
+/// Note: Google's "id" field is mapped to "sub" for consistency with JWT standards.
+/// "verified_email" is mapped to email_verified.
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct GoogleUserInfo {
+    /// Google user ID (mapped from "id" field in response)
     #[serde(rename = "id")]
     pub sub: String,
+    /// User's email address
     pub email: String,
+    /// User's full name (optional)
     pub name: Option<String>,
+    /// URL to user's profile picture (optional)
     pub picture: Option<String>,
+    /// Whether the email has been verified by Google
     #[serde(rename = "verified_email")]
     pub email_verified: Option<bool>,
 }
 
+/// JWT token claims used for authorization after verification.
+/// Contains the user identity and role for access control decisions.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
+    /// Subject (user ID) from the token
     pub sub: String,
+    /// User's email address from the token
     pub email: String,
+    /// User role for role-based access control (e.g., "ADMIN", "ORGANIZER", "CUSTOMER")
     pub role: String,
+    /// Token expiration timestamp (seconds since Unix epoch)
     pub exp: usize,
+    /// Token issued-at timestamp (seconds since Unix epoch)
     pub iat: usize,
 }
 

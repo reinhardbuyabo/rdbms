@@ -411,8 +411,6 @@ async fn exchange_code_for_token(code: &str) -> anyhow::Result<Value> {
         .await
         .context("Failed to read token response text")?;
 
-    log::debug!("Token response body: {}", token_text);
-
     let token_data: Value =
         serde_json::from_str(&token_text).context("Failed to parse token response")?;
 
@@ -445,7 +443,10 @@ async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserIn
         .await
         .context("Failed to read user info response text")?;
 
-    log::debug!("Google user info response body: {}", text);
+    log::debug!(
+        "Google user info response body length: {} bytes",
+        text.len()
+    );
 
     let user_info: GoogleUserInfo = match serde_json::from_str(&text) {
         Ok(info) => info,
@@ -455,7 +456,7 @@ async fn get_google_user_info(access_token: &str) -> anyhow::Result<GoogleUserIn
         }
     };
 
-    log::debug!("Successfully parsed user info: email={}", user_info.email);
+    log::debug!("Successfully parsed user info: sub={}", user_info.sub);
 
     Ok(user_info)
 }
